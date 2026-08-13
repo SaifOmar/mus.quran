@@ -15,7 +15,7 @@ Install (developer)
 ```bash
 # Copy the plugin folder to the omarchy plugins directory. The target
 # directory name should match the plugin `id` in manifest.json (here: mus.quran).
-cp -r saif.quran ~/.config/omarchy/plugins/mus.quran
+cp -r mus.quran ~/.config/omarchy/plugins/mus.quran
 omarchy plugin validate ~/.config/omarchy/plugins/mus.quran
 omarchy plugin enable mus.quran --section right
 ```
@@ -27,7 +27,7 @@ Usage
 
 Layout (repo)
 ```
-saif.quran/  # working plugin source directory
+mus.quran/  # working plugin source directory
 ├── manifest.json
 ├── Service.qml
 ├── BarWidget.qml

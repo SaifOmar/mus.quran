@@ -12,7 +12,7 @@ Item {
 
   readonly property string dataDir: Quickshell.env("HOME") + "/.local/state/omarchy/quran"
   readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/settings/quran.json"
-  readonly property string mpvSocketPath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/saif-quran-mpv.sock"
+  readonly property string mpvSocketPath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/mus-quran-mpv.sock"
 
   // --- playback state (read by the bar widget + IPC) ---
   readonly property var player: playerFacade
@@ -66,8 +66,8 @@ Item {
   property int downloadTotal: 114
   property int downloadRevision: 0
   property string downloadReciter: ""   // reciter currently being downloaded
-  readonly property string downloadScript: Quickshell.env("HOME") + "/.config/omarchy/plugins/saif.quran/download.sh"
-  readonly property string cacheScript: Quickshell.env("HOME") + "/.config/omarchy/plugins/saif.quran/cache.sh"
+  readonly property string downloadScript: Quickshell.env("HOME") + "/.config/omarchy/plugins/mus.quran/download.sh"
+  readonly property string cacheScript: Quickshell.env("HOME") + "/.config/omarchy/plugins/mus.quran/cache.sh"
   readonly property string cacheDir: Quickshell.env("HOME") + "/.cache/omarchy/quran"
 
   // --- streaming cache (invisible to the user; never changes download icons) ---

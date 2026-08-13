@@ -7,9 +7,9 @@ import "Model.js" as Model
 
 BarWidget {
     id: root
-    moduleName: "saif.quran"
+    moduleName: "mus.quran"
 
-    readonly property var quranService: bar && bar.shell ? bar.shell.firstPartyServiceFor("saif.quran") : null
+    readonly property var quranService: bar && bar.shell ? bar.shell.firstPartyServiceFor("mus.quran") : null
     // readonly property string iconGlyph: ""
     readonly property string iconGlyph: ""
 
