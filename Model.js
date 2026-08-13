@@ -1,0 +1,522 @@
+.pragma library
+
+// Display languages: `value` is the storage/API language code, `label` is the
+// native name shown in the picker. The omarchy SearchableDropdown reads
+// `{value, label}` — using `code` was why "language" persisted as "undefined".
+var LANGUAGES = [
+  { value: "ar", label: "العربية" },
+  { value: "en", label: "English" },
+  { value: "fr", label: "Français" },
+  { value: "es", label: "Español" },
+  { value: "tr", label: "Türkçe" },
+  { value: "id", label: "Bahasa Indonesia" },
+  { value: "ur", label: "اردو" },
+  { value: "bn", label: "বাংলা" },
+  { value: "ru", label: "Русский" },
+  { value: "zh", label: "中文" }
+]
+
+var DEFAULT_LANGUAGE = "en"
+var DEFAULT_RECITER = "ar.alafasy"
+var CDN_BASE = "https://cdn.islamic.app/quran/audio-surah"
+var API_RECITERS = "https://api.islamic.app/v1/audio/reciters"
+var API_RECITERS_ENG = "https://mp3quran.net/api/v3/reciters?language=eng"
+var API_RECITERS_AR = "https://mp3quran.net/api/v3/reciters?language=ar"
+
+var STATE_VERSION = 2
+var CATALOG_TTL_MS = 24 * 60 * 60 * 1000
+
+// --- playback modes ---
+var MODE_SINGLE = "single"       // play one surah, then stop
+var MODE_CONTINUE = "continue"   // advance to next surah, stop after 114
+var MODE_REPEAT_ONE = "repeat-one"
+var MODE_REPEAT_ALL = "repeat-all"
+var MODES = [MODE_SINGLE, MODE_CONTINUE, MODE_REPEAT_ONE, MODE_REPEAT_ALL]
+
+// --- UI strings -----------------------------------------------------------
+// Full chrome translation: tabs, placeholders, buttons, prompts, errors,
+// tooltips. `tr(lang, key)` falls back to English.
+var STRINGS = {
+  en: {
+    tabSurah: "Surah", tabReciter: "Reciter",
+    searchSurah: "Search surah (any language)", searchReciter: "Search reciter",
+    language: "Language", noSurahSelected: "No surah selected",
+    download: "Download", streamOnly: "Stream only", close: "Close",
+    downloadPrompt: "Download full mushaf (%1)?",
+    downloadDesc: "~2 GB · 114 surahs · plays offline afterwards. You can also stream instead.",
+    downloading: "Downloading mushaf for %1",
+    single: "Single", continue: "Continue", repeatOne: "Repeat one", repeatAll: "Repeat all",
+    noResults: "No results for \"%1\"", retry: "Retry",
+    noAudio: "No audio available for this reciter",
+    reciterLoadFailed: "Couldn't load reciters",
+    playbackFailed: "Playback failed. Retry, or stream it instead.",
+    downloaded: "Downloaded", partial: "Partial", notDownloaded: "Not downloaded",
+    tooltip: "Quran", nowPlaying: "Now playing · %1",
+    surahTabTitle: "Surah", reciterTabTitle: "Reciter",
+    verses: "%1 verses", seekHint: "Click to seek",
+    invalidInput: "Invalid reciter or surah",
+    browse: "Browse", downloadingSurah: "Downloading surah %1",
+    clearCache: "Clear cache", cacheSize: "Cache: %1", downloadFailed: "Download failed",
+    mpvMissing: "Playback unavailable — is mpv installed?",
+    settings: "Settings", storage: "Storage & Cache", clear: "Clear",
+  },
+  ar: {
+    tabSurah: "السورة", tabReciter: "القارئ",
+    searchSurah: "ابحث عن سورة (بأي لغة)", searchReciter: "ابحث عن قارئ",
+    language: "اللغة", noSurahSelected: "لم يتم اختيار سورة",
+    download: "تحميل", streamOnly: "بث فقط", close: "إغلاق",
+    downloadPrompt: "تحميل المصحف كاملاً (%1)؟",
+    downloadDesc: "حوالي 2 جيجا · 114 سورة · يعمل دون اتصال بعد ذلك. يمكنك أيضًا البث بدلاً من ذلك.",
+    downloading: "جارٍ تحميل المصحف لـ %1",
+    single: "واحدة", continue: "متابعة", repeatOne: "تكرار السورة", repeatAll: "تكرار الكل",
+    noResults: "لا توجد نتائج لـ \"%1\"", retry: "إعادة المحاولة",
+    noAudio: "لا يتوفر صوت لهذا القارئ",
+    reciterLoadFailed: "تعذّر تحميل القُرّاء",
+    playbackFailed: "فشل التشغيل. أعد المحاولة أو قم بالبث.",
+    downloaded: "تم التنزيل", partial: "جزئي", notDownloaded: "لم يتم التنزيل",
+    tooltip: "القرآن", nowPlaying: "قيد التشغيل · %1",
+    surahTabTitle: "السورة", reciterTabTitle: "القارئ",
+    verses: "%1 آية", seekHint: "انقر للانتقال",
+    invalidInput: "قارئ أو سورة غير صالحة",
+    browse: "تصفح", downloadingSurah: "جارٍ تحميل السورة %1",
+    clearCache: "مسح التخزين المؤقت", cacheSize: "التخزين المؤقت: %1", downloadFailed: "فشل التنزيل",
+    mpvMissing: "التشغيل غير متاح — هل mpv مثبّت؟",
+    settings: "الإعدادات", storage: "التخزين والذاكرة", clear: "مسح",
+  },
+  fr: {
+    tabSurah: "Sourate", tabReciter: "Récitant",
+    searchSurah: "Rechercher une sourate (toute langue)", searchReciter: "Rechercher un récitant",
+    language: "Langue", noSurahSelected: "Aucune sourate sélectionnée",
+    download: "Télécharger", streamOnly: "Streaming uniquement", close: "Fermer",
+    downloadPrompt: "Télécharger le mushaf complet (%1) ?",
+    downloadDesc: "~2 Go · 114 sourates · écoute hors ligne ensuite. Le streaming reste possible.",
+    downloading: "Téléchargement du mushaf pour %1",
+    single: "Unique", continue: "Continuer", repeatOne: "Répéter la sourate", repeatAll: "Répéter tout",
+    noResults: "Aucun résultat pour \"%1\"", retry: "Réessayer",
+    noAudio: "Aucun audio disponible pour ce récitant",
+    reciterLoadFailed: "Impossible de charger les récitants",
+    playbackFailed: "Échec de lecture. Réessayez ou passez en streaming.",
+    downloaded: "Téléchargé", partial: "Partiel", notDownloaded: "Non téléchargé",
+    tooltip: "Coran", nowPlaying: "Lecture en cours · %1",
+    surahTabTitle: "Sourate", reciterTabTitle: "Récitant",
+    verses: "%1 versets", seekHint: "Cliquer pour avancer",
+    invalidInput: "Récitant ou sourate invalide",
+    browse: "Parcourir", downloadingSurah: "Téléchargement de la sourate %1",
+    clearCache: "Vider le cache", cacheSize: "Cache : %1", downloadFailed: "Échec du téléchargement",
+    mpvMissing: "Lecture indisponible — mpv est-il installé ?",
+    settings: "Paramètres", storage: "Stockage et Cache", clear: "Vider",
+  },
+  es: {
+    tabSurah: "Sura", tabReciter: "Recitador",
+    searchSurah: "Buscar sura (cualquier idioma)", searchReciter: "Buscar recitador",
+    language: "Idioma", noSurahSelected: "Ninguna sura seleccionada",
+    download: "Descargar", streamOnly: "Solo streaming", close: "Cerrar",
+    downloadPrompt: "¿Descargar el mushaf completo (%1)?",
+    downloadDesc: "~2 GB · 114 suras · reproducción sin conexión después. También puede transmitirse.",
+    downloading: "Descargando mushaf para %1",
+    single: "Única", continue: "Continuar", repeatOne: "Repetir sura", repeatAll: "Repetir todo",
+    noResults: "Sin resultados para \"%1\"", retry: "Reintentar",
+    noAudio: "No hay audio disponible para este recitador",
+    reciterLoadFailed: "No se pudieron cargar los recitadores",
+    playbackFailed: "Error de reproducción. Reintenta o usa streaming.",
+    downloaded: "Descargado", partial: "Parcial", notDownloaded: "No descargado",
+    tooltip: "Corán", nowPlaying: "Reproduciendo · %1",
+    surahTabTitle: "Sura", reciterTabTitle: "Recitador",
+    verses: "%1 versículos", seekHint: "Haz clic para buscar",
+    invalidInput: "Recitador o sura no válidos",
+    browse: "Explorar", downloadingSurah: "Descargando sura %1",
+    clearCache: "Vaciar caché", cacheSize: "Caché: %1", downloadFailed: "Error de descarga",
+    mpvMissing: "Reproducción no disponible — ¿está instalado mpv?",
+    settings: "Ajustes", storage: "Almacenamiento y Caché", clear: "Vaciar",
+  },
+  tr: {
+    tabSurah: "Sure", tabReciter: "Okuyucu",
+    searchSurah: "Sure ara (her dilde)", searchReciter: "Okuyucu ara",
+    language: "Dil", noSurahSelected: "Sure seçilmedi",
+    download: "İndir", streamOnly: "Sadece akış", close: "Kapat",
+    downloadPrompt: "Tüm mushaf indirilsin mi (%1)?",
+    downloadDesc: "~2 GB · 114 sure · sonrasında çevrimdışı çalar. Akış da yapabilirsiniz.",
+    downloading: "%1 için mushaf indiriliyor",
+    single: "Tek", continue: "Devam et", repeatOne: "Sureyi tekrarla", repeatAll: "Tümünü tekrarla",
+    noResults: "\"%1\" için sonuç yok", retry: "Yeniden dene",
+    noAudio: "Bu okuyucu için ses yok",
+    reciterLoadFailed: "Okuyucular yüklenemedi",
+    playbackFailed: "Oynatma başarısız. Yeniden deneyin veya akış kullanın.",
+    downloaded: "İndirildi", partial: "Kısmi", notDownloaded: "İndirilmedi",
+    tooltip: "Kuran", nowPlaying: "Şu an çalıyor · %1",
+    surahTabTitle: "Sure", reciterTabTitle: "Okuyucu",
+    verses: "%1 ayet", seekHint: "Gitmek için tıklayın",
+    invalidInput: "Geçersiz okuyucu veya sure",
+    browse: "Gözat", downloadingSurah: "%1. sure indiriliyor",
+    clearCache: "Önbelleği temizle", cacheSize: "Önbellek: %1", downloadFailed: "İndirme başarısız",
+    mpvMissing: "Oynatma kullanılamıyor — mpv yüklü mü?",
+    settings: "Ayarlar", storage: "Depolama ve Önbellek", clear: "Temizle",
+  },
+  id: {
+    tabSurah: "Surah", tabReciter: "Qari",
+    searchSurah: "Cari surah (bahasa apa pun)", searchReciter: "Cari qari",
+    language: "Bahasa", noSurahSelected: "Tidak ada surah dipilih",
+    download: "Unduh", streamOnly: "Streaming saja", close: "Tutup",
+    downloadPrompt: "Unduh mushaf lengkap (%1)?",
+    downloadDesc: "~2 GB · 114 surah · bisa diputar offline setelahnya. Anda juga bisa streaming.",
+    downloading: "Mengunduh mushaf untuk %1",
+    single: "Tunggal", continue: "Lanjutkan", repeatOne: "Ulangi surah", repeatAll: "Ulangi semua",
+    noResults: "Tidak ada hasil untuk \"%1\"", retry: "Coba lagi",
+    noAudio: "Tidak ada audio untuk qari ini",
+    reciterLoadFailed: "Gagal memuat daftar qari",
+    playbackFailed: "Pemutaran gagal. Coba lagi atau gunakan streaming.",
+    downloaded: "Terunduh", partial: "Sebagian", notDownloaded: "Belum diunduh",
+    tooltip: "Al-Qur'an", nowPlaying: "Sedang diputar · %1",
+    surahTabTitle: "Surah", reciterTabTitle: "Qari",
+    verses: "%1 ayat", seekHint: "Klik untuk berpindah",
+    invalidInput: "Qari atau surah tidak valid",
+    browse: "Jelajahi", downloadingSurah: "Mengunduh surah %1",
+    clearCache: "Bersihkan cache", cacheSize: "Cache: %1", downloadFailed: "Unduhan gagal",
+    mpvMissing: "Pemutaran tidak tersedia — apakah mpv terpasang?",
+    settings: "Pengaturan", storage: "Penyimpanan & Cache", clear: "Bersihkan",
+  },
+  ur: {
+    tabSurah: "سورة", tabReciter: "قاری",
+    searchSurah: "سورتہ تلاش کریں (کسی بھی زبان میں)", searchReciter: "قاری تلاش کریں",
+    language: "زبان", noSurahSelected: "کوئی سورت منتخب نہیں",
+    download: "ڈاؤن لوڈ", streamOnly: "صرف سٹریم", close: "بند کریں",
+    downloadPrompt: "مکمل مصحف ڈاؤن لوڈ کریں (%1)؟",
+    downloadDesc: "تقریباً 2 جی بی · 114 سورتیں · بعد ازاں آف لائن چلتی ہیں۔ سٹریم بھی کیا جا سکتا ہے۔",
+    downloading: "%1 کا مصحف ڈاؤن لوڈ ہو رہا ہے",
+    single: "واحد", continue: "جاری رکھیں", repeatOne: "سورت دہرائیں", repeatAll: "سب دہرائیں",
+    noResults: "\"%1\" کے لیے کوئی نتیجہ نہیں", retry: "دوبارہ کوشش",
+    noAudio: "اس قاری کے لیے آڈیو دستیاب نہیں",
+    reciterLoadFailed: "قاریوں کی فہرست لوڈ نہیں ہو سکی",
+    playbackFailed: "پلے بیک ناکام۔ دوبارہ کوشش کریں یا سٹریم کریں۔",
+    downloaded: "ڈاؤن لوڈ شدہ", partial: "جزوی", notDownloaded: "ڈاؤن لوڈ نہیں ہوا",
+    tooltip: "قرآن", nowPlaying: "چل رہا ہے · %1",
+    surahTabTitle: "سورت", reciterTabTitle: "قاری",
+    verses: "%1 آیات", seekHint: "جگہ کے لیے کلک کریں",
+    invalidInput: "غیر درست قاری یا سورت",
+    browse: "براؤز کریں", downloadingSurah: "سورت %1 ڈاؤن لوڈ ہو رہی ہے",
+    clearCache: "کیشے صاف کریں", cacheSize: "کیشے: %1", downloadFailed: "ڈاؤن لوڈ ناکام",
+    mpvMissing: "پلے بیک دستیاب نہیں — کیا mpv نصب ہے؟",
+    settings: "سیٹنگز", storage: "سٹوریج اور کیشے", clear: "صاف کریں",
+  },
+  bn: {
+    tabSurah: "সূরা", tabReciter: "ক্বারী",
+    searchSurah: "সূরা খুঁজুন (যেকোনো ভাষায়)", searchReciter: "ক্বারী খুঁজুন",
+    language: "ভাষা", noSurahSelected: "কোনো সূরা নির্বাচিত নেই",
+    download: "ডাউনলোড", streamOnly: "শুধু স্ট্রিম", close: "বন্ধ",
+    downloadPrompt: "সম্পূর্ণ মুসহাফ ডাউনলোড করবেন (%1)?",
+    downloadDesc: "~২ জিবি · ১১৪ সূরা · পরে অফলাইনে চলে। স্ট্রিমও করতে পারবেন।",
+    downloading: "%1-এর জন্য মুসহাফ ডাউনলোড হচ্ছে",
+    single: "একটি", continue: "চালিয়ে যান", repeatOne: "সূরা পুনরাবৃত্তি", repeatAll: "সব পুনরাবৃত্তি",
+    noResults: "\"%1\" এর জন্য কোনো ফলাফল নেই", retry: "আবার চেষ্টা",
+    noAudio: "এই ক্বারীর জন্য অডিও নেই",
+    reciterLoadFailed: "ক্বারীদের তালিকা লোড করা যায়নি",
+    playbackFailed: "প্লেব্যাক ব্যর্থ। আবার চেষ্টা করুন বা স্ট্রিম করুন।",
+    downloaded: "ডাউনলোড হয়েছে", partial: "আংশিক", notDownloaded: "ডাউনলোড হয়নি",
+    tooltip: "কুরআন", nowPlaying: "চলছে · %1",
+    surahTabTitle: "সূরা", reciterTabTitle: "ক্বারী",
+    verses: "%1 আয়াত", seekHint: "যেতে ক্লিক করুন",
+    invalidInput: "অবৈধ ক্বারী বা সূরা",
+    browse: "ব্রাউজ করুন", downloadingSurah: "সূরা %1 ডাউনলোড হচ্ছে",
+    clearCache: "ক্যাশ মুছুন", cacheSize: "ক্যাশ: %1", downloadFailed: "ডাউনলোড ব্যর্থ",
+    mpvMissing: "প্লেব্যাক পাওয়া যাচ্ছে না — mpv কি ইনস্টল আছে?",
+    settings: "সেটিংস", storage: "স্টোরেজ ও ক্যাশ", clear: "মুছুন",
+  },
+  ru: {
+    tabSurah: "Сура", tabReciter: "Чтец",
+    searchSurah: "Поиск суры (на любом языке)", searchReciter: "Поиск чтеца",
+    language: "Язык", noSurahSelected: "Сура не выбрана",
+    download: "Скачать", streamOnly: "Только стриминг", close: "Закрыть",
+    downloadPrompt: "Скачать полный мусхаф (%1)?",
+    downloadDesc: "~2 ГБ · 114 сур · затем воспроизведение офлайн. Можно и стримить.",
+    downloading: "Скачивание мусхафа для %1",
+    single: "Одна", continue: "Продолжить", repeatOne: "Повтор суры", repeatAll: "Повторять всё",
+    noResults: "Нет результатов для \"%1\"", retry: "Повторить",
+    noAudio: "Для этого чтеца аудио недоступно",
+    reciterLoadFailed: "Не удалось загрузить чтецов",
+    playbackFailed: "Ошибка воспроизведения. Повторите или включите стриминг.",
+    downloaded: "Скачано", partial: "Частично", notDownloaded: "Не скачано",
+    tooltip: "Коран", nowPlaying: "Сейчас играет · %1",
+    surahTabTitle: "Сура", reciterTabTitle: "Чтец",
+    verses: "%1 аятов", seekHint: "Нажмите для перемотки",
+    invalidInput: "Неверный чтец или сура",
+    browse: "Обзор", downloadingSurah: "Скачивание суры %1",
+    clearCache: "Очистить кэш", cacheSize: "Кэш: %1", downloadFailed: "Ошибка загрузки",
+    mpvMissing: "Воспроизведение недоступно — установлен ли mpv?",
+    settings: "Настройки", storage: "Память и Кэш", clear: "Очистить",
+  },
+  zh: {
+    tabSurah: "章节", tabReciter: "诵读者",
+    searchSurah: "搜索章节（任何语言）", searchReciter: "搜索诵读者",
+    language: "语言", noSurahSelected: "未选择章节",
+    download: "下载", streamOnly: "仅流播放", close: "关闭",
+    downloadPrompt: "下载完整誊本（%1）？",
+    downloadDesc: "约 2 GB · 114 章 · 之后可离线播放。也可选择流播放。",
+    downloading: "正在为 %1 下载誊本",
+    single: "单章", continue: "继续", repeatOne: "重复本章", repeatAll: "全部重复",
+    noResults: "没有“%1”的结果", retry: "重试",
+    noAudio: "该诵读者没有可用音频",
+    reciterLoadFailed: "无法加载诵读者列表",
+    playbackFailed: "播放失败。请重试或改用流播放。",
+    downloaded: "已下载", partial: "部分", notDownloaded: "未下载",
+    tooltip: "古兰经", nowPlaying: "正在播放 · %1",
+    surahTabTitle: "章节", reciterTabTitle: "诵读者",
+    verses: "%1 节经文", seekHint: "点击跳转",
+    invalidInput: "诵读者或章节无效",
+    browse: "浏览", downloadingSurah: "正在下载章节 %1",
+    clearCache: "清除缓存", cacheSize: "缓存：%1", downloadFailed: "下载失败",
+    mpvMissing: "播放不可用 — 是否已安装 mpv？",
+    settings: "设置", storage: "存储与缓存", clear: "清除",
+  }
+}
+
+function tr(lang, key) {
+  var table = STRINGS[lang] || STRINGS[en] || {}
+  var s = table[key]
+  if (s === undefined) s = STRINGS[en][key]
+  return (s === undefined) ? key : String(s)
+}
+
+function trArgs(lang, key, args) {
+  var s = tr(lang, key)
+  for (var i = 0; i < args.length; i++) s = s.replace("%" + (i + 1), String(args[i]))
+  return s
+}
+
+// --- parsing -------------------------------------------------------------
+
+function pad3(n) {
+  var s = String(n)
+  while (s.length < 3) s = "0" + s
+  return s
+}
+
+function parseReciters(json, jsonAr) {
+  if (!json) return []
+  var data = Array.isArray(json) ? json : (json.reciters || json.data || [])
+
+  // If data comes from mp3quran API
+  if (data.length > 0 && data[0].moshaf !== undefined) {
+    var arMap = {}
+    if (jsonAr && jsonAr.reciters) {
+      for (var j = 0; j < jsonAr.reciters.length; j++) {
+        var itemAr = jsonAr.reciters[j]
+        if (itemAr && itemAr.id) arMap[itemAr.id] = itemAr.name
+      }
+    }
+    var outMp3 = []
+    for (var i = 0; i < data.length; i++) {
+      var r = data[i]
+      if (!r || !r.moshaf || !Array.isArray(r.moshaf) || r.moshaf.length === 0) continue
+      var m = null
+      for (var k = 0; k < r.moshaf.length; k++) {
+        var itemM = r.moshaf[k]
+        if (itemM.rewaya_id === 1 || (itemM.name && itemM.name.indexOf("Hafs") !== -1)) {
+          m = itemM
+          break
+        }
+      }
+      if (!m) m = r.moshaf[0]
+      if (!m || !m.server) continue
+
+      var identifier = "mp3quran_" + r.id
+      if (r.id === 123 || (r.name && r.name.indexOf("Mishary Alafasi") !== -1)) identifier = "ar.alafasy"
+
+      outMp3.push({
+        identifier: identifier,
+        id: String(r.id),
+        name: arMap[r.id] || String(r.name || ""),
+        englishName: String(r.name || ""),
+        server: String(m.server)
+      })
+    }
+    outMp3.sort(function(a, b) {
+      var key = a.englishName || a.name
+      var other = b.englishName || b.name
+      return key.localeCompare(other)
+    })
+    return outMp3
+  }
+
+  // Legacy / fallback parsing
+  var out = []
+  for (var idx = 0; idx < data.length; idx++) {
+    var rec = data[idx]
+    if (!rec || !rec.identifier) continue
+    var levels = rec.audioLevels || []
+    if (levels.indexOf("surah") === -1) continue
+    out.push({
+      identifier: String(rec.identifier),
+      name: String(rec.name || ""),
+      englishName: String(rec.englishName || ""),
+      levels: levels
+    })
+  }
+  out.sort(function(a, b) {
+    var key = a.englishName || a.name
+    var other = b.englishName || b.name
+    return key.localeCompare(other)
+  })
+  return out
+}
+
+function parseSurahs(json) {
+  if (!json) return []
+  var out = []
+  for (var i = 0; i < json.length; i++) {
+    var s = json[i]
+    if (!s || !s.number) continue
+    out.push({
+      number: Number(s.number),
+      name: String(s.name || ""),
+      transliteration: String(s.transliteration || ""),
+      type: String(s.type || ""),
+      totalVerses: Number(s.total_verses || 0),
+      translations: s.translations || {}
+    })
+  }
+  return out
+}
+
+// --- validation ------------------------------------------------------------
+
+function isValidSurahNumber(n) {
+  return typeof n === "number" && n >= 1 && n <= 114 && Math.floor(n) === n
+}
+
+function reciterExists(reciters, id) {
+  if (!reciters || !id) return false
+  for (var i = 0; i < reciters.length; i++) {
+    if (reciters[i].identifier === id) return true
+  }
+  return false
+}
+
+function isValidLanguage(code) {
+  if (!code) return false
+  for (var i = 0; i < LANGUAGES.length; i++) {
+    if (LANGUAGES[i].value === code) return true
+  }
+  return false
+}
+
+// --- naming --------------------------------------------------------------
+// Pure chosen-language labels: NO Arabic is appended for non-Arabic languages.
+
+function surahLabel(surah, language) {
+  if (!surah) return ""
+  if (language === "ar") return surah.name
+  if (language === "en") return surah.transliteration
+  var t = surah.translations ? surah.translations[language] : ""
+  return t || surah.transliteration
+}
+
+function surahDisplayLabel(surah, language) {
+  return surahLabel(surah, language)
+}
+
+function surahListLabel(surah, language) {
+  var label = surahLabel(surah, language)
+  if (language === "ar") return label
+  var arabic = surah.name || ""
+  return arabic ? label + "  " + arabic : label
+}
+
+
+function reciterLabel(reciter, language) {
+  if (!reciter) return ""
+  if (language === "ar") return reciter.name
+  return reciter.englishName || reciter.name
+}
+
+function reciterDisplayLabel(reciter, language) {
+  return reciterLabel(reciter, language)
+}
+
+// --- filtering ------------------------------------------------------------
+
+function surahMatches(surah, query) {
+  if (!query) return true
+  var q = query.toLowerCase()
+  var fields = [surah.transliteration, surah.name]
+  var tr_ = surah.translations || {}
+  for (var i = 0; i < LANGUAGES.length; i++) {
+    fields.push(tr_[LANGUAGES[i].value] || "")
+  }
+  for (var j = 0; j < fields.length; j++) {
+    if (fields[j] && fields[j].toLowerCase().indexOf(q) !== -1) return true
+  }
+  return false
+}
+
+function reciterMatches(reciter, query) {
+  if (!query) return true
+  var q = query.toLowerCase()
+  return (reciter.name && reciter.name.toLowerCase().indexOf(q) !== -1)
+    || (reciter.englishName && reciter.englishName.toLowerCase().indexOf(q) !== -1)
+}
+
+function filterSurahs(surahs, query) {
+  var out = []
+  for (var i = 0; i < surahs.length; i++) {
+    if (surahMatches(surahs[i], query)) out.push(surahs[i])
+  }
+  return out
+}
+
+function filterReciters(reciters, query) {
+  var out = []
+  for (var i = 0; i < reciters.length; i++) {
+    if (reciterMatches(reciters[i], query)) out.push(reciters[i])
+  }
+  return out
+}
+
+// --- audio ----------------------------------------------------------------
+
+function audioUrl(reciterId, surahNumber, reciterObj) {
+  if (reciterObj && reciterObj.server)
+    return reciterObj.server + pad3(surahNumber) + ".mp3"
+  var providerId = reciterId === "ar.ajamy" ? "ar.ahmedajamy" : reciterId
+  return CDN_BASE + "/" + providerId + "/" + Number(surahNumber) + ".mp3"
+}
+
+function localAudioUrl(dataDir, reciterId, surahNumber) {
+  return "file://" + dataDir + "/" + reciterId + "/" + Number(surahNumber) + ".mp3"
+}
+
+// --- format helpers --------------------------------------------------------
+
+function formatTime(ms) {
+  if (!ms || ms < 0) ms = 0
+  var total = Math.floor(ms / 1000)
+  var h = Math.floor(total / 3600)
+  var m = Math.floor((total % 3600) / 60)
+  var s = total % 60
+  if (h > 0) return h + ":" + (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s
+  return m + ":" + (s < 10 ? "0" : "") + s
+}
+
+function formatSize(bytes) {
+  if (!bytes || bytes < 0) bytes = 0
+  if (bytes < 1024) return bytes + " B"
+  var kb = bytes / 1024
+  if (kb < 1024) return (kb >= 100 ? Math.round(kb) : Math.round(kb * 10) / 10) + " KB"
+  var mb = kb / 1024
+  if (mb < 1024) return (mb >= 100 ? Math.round(mb) : Math.round(mb * 10) / 10) + " MB"
+  var gb = mb / 1024
+  return (gb >= 100 ? Math.round(gb) : Math.round(gb * 10) / 10) + " GB"
+}
+
+function slugify(str) {
+  return String(str || "").replace(/[^a-z0-9]/gi, "").toLowerCase()
+}
+
+function modeLabel(language, mode) {
+  switch (mode) {
+    case MODE_SINGLE: return tr(language, "single")
+    case MODE_CONTINUE: return tr(language, "continue")
+    case MODE_REPEAT_ONE: return tr(language, "repeatOne")
+    case MODE_REPEAT_ALL: return tr(language, "repeatAll")
+  }
+  return tr(language, "single")
+}
