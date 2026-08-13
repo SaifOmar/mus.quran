@@ -1,5 +1,7 @@
 # mus.quran — Quran Player (concise)
 
+![preview](preview.png)
+
 Lightweight Quran recitation player for the Omarchy bar. The service keeps
 playback running when the popup closes and exposes a right-section bar widget.
 
