@@ -651,6 +651,12 @@ Item {
   }
 
   function applyDownloadProgress(line) {
+    var bytes = String(line).match(/^progress_bytes\s+(\d+)\/(\d+)\s*$/)
+    if (bytes && downloadProc.targetSurah > 0) {
+      root.downloadDone = Math.min(100, parseInt(bytes[1]))
+      root.downloadTotal = 100
+      return
+    }
     var m = String(line).match(/^progress\s+(\d+)\/(\d+)\s*$/)
     if (!m) return
     if (downloadProc.targetSurah === 0) {

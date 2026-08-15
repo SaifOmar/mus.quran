@@ -246,8 +246,32 @@ fetch() {
   fi
   local target
   target="$(url_for "$n")"
-  if curl -fsSL --retry 3 -C - --max-redirs 0 --proto '=http,https' --proto-redir '=https' \
-      --max-filesize "$MAX_SURAH_BYTES" "$target" -o "${DEST}/${n}.mp3.part"; then
+  local progress_dir progress_fifo curl_pid curl_status line pct
+  progress_dir="$(mktemp -d "${TMPDIR:-/tmp}/quran-download.XXXXXX")" || return 1
+  progress_fifo="${progress_dir}/stderr"
+  mkfifo "$progress_fifo" || { rmdir "$progress_dir"; return 1; }
+
+  # Keep curl's progress bar off the terminal, but forward its percentage as
+  # machine-readable stdout. SplitParser in Service.qml receives these lines
+  # while curl is still writing the file, instead of only seeing 1/1 at EOF.
+  echo "progress_bytes 0/100"
+  curl -fsSL --progress-bar --retry 3 -C - --max-redirs 0 \
+      --proto '=http,https' --proto-redir '=https' \
+      --max-filesize "$MAX_SURAH_BYTES" "$target" \
+      -o "${DEST}/${n}.mp3.part" 2>"$progress_fifo" &
+  curl_pid=$!
+  while IFS= read -r -d $'\r' line; do
+    if [[ "$line" =~ ([0-9]+)(\.[0-9]+)?% ]]; then
+      pct="${BASH_REMATCH[1]}"
+      echo "progress_bytes ${pct}/100"
+    fi
+  done < "$progress_fifo"
+  wait "$curl_pid"
+  curl_status=$?
+  rm -f "$progress_fifo"
+  rmdir "$progress_dir"
+
+  if (( curl_status == 0 )); then
     mv "${DEST}/${n}.mp3.part" "${DEST}/${n}.mp3"
     return 0
   else
