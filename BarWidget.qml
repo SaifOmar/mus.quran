@@ -668,7 +668,7 @@ BarWidget {
                                                 downloadRevision;
                                                 return root.activeTab === "surah" && quranService ? quranService.isSurahDownloaded(quranService.reciterId, surah.number) : false;
                                             }
-                                            readonly property bool isDownloading: root.activeTab === "surah" ? (quranService ? quranService.isSurahDownloading(quranService.reciterId, surah.number) : false) : (quranService ? quranService.isReciterDownloading(reciter.identifier) : false)
+                                            readonly property bool isDownloading: root.activeTab === "surah" ? (quranService ? (quranService.isSurahDownloading(quranService.reciterId, surah.number) || quranService.isReciterDownloading(quranService.reciterId)) : false) : (quranService ? quranService.isReciterDownloading(reciter.identifier) : false)
                                             readonly property int downloadPercent: isDownloading && quranService && quranService.downloadTotal > 0 ? Math.min(100, Math.round(100 * quranService.downloadDone / quranService.downloadTotal)) : 0
 
                                             readonly property color rowTitle: selected ? Qt.lighter(root.accentC, 1.2) : root.fg
@@ -770,14 +770,35 @@ BarWidget {
                                                         font.pixelSize: Style.font.bodySmall
                                                     }
 
-                                                    Text {
+                                                    Item {
                                                         anchors.centerIn: parent
                                                         visible: isDownloading
-                                                        text: downloadPercent + "%"
-                                                        color: root.accentC
-                                                        font.family: root.bar.fontFamily
-                                                        font.pixelSize: Style.font.caption
-                                                        font.bold: true
+
+                                                        Text {
+                                                            anchors.centerIn: parent
+                                                            anchors.verticalCenterOffset: -5
+                                                            text: "󰇚"
+                                                            color: root.accentC
+                                                            font.family: root.bar.fontFamily
+                                                            font.pixelSize: Style.font.bodySmall
+                                                            RotationAnimation on rotation {
+                                                                from: 0
+                                                                to: 360
+                                                                duration: 800
+                                                                loops: Animation.Infinite
+                                                                running: isDownloading
+                                                            }
+                                                        }
+
+                                                        Text {
+                                                            anchors.centerIn: parent
+                                                            anchors.verticalCenterOffset: 6
+                                                            text: downloadPercent + "%"
+                                                            color: root.accentC
+                                                            font.family: root.bar.fontFamily
+                                                            font.pixelSize: Style.font.caption
+                                                            font.bold: true
+                                                        }
                                                     }
 
                                                     MouseArea {
@@ -791,7 +812,7 @@ BarWidget {
                                                             if (!quranService || isDownloading)
                                                                 return;
                                                             if (root.activeTab === "surah")
-                                                                Quickshell.execDetached(["omarchy-shell", "quran", "download", quranService.reciterId, String(surah.number)]);
+                                                                Quickshell.execDetached(["omarchy-shell", "quran", "download", quranService.reciterId]);
                                                             else
                                                                 Quickshell.execDetached(["omarchy-shell", "quran", "download", reciter.identifier]);
                                                         }
@@ -799,7 +820,7 @@ BarWidget {
 
                                                     PanelToolTip {
                                                         visible: downloadActionArea.containsMouse
-                                                        text: root.activeTab === "surah" ? (isDownloading ? root.trArgs("downloadingSurah", [surah.number]) : (surahDownloaded ? root.tr("downloaded") : root.tr("download"))) : (isDownloading ? root.trArgs("downloading", [Model.reciterDisplayLabel(reciter, root.lang())]) : (fullDownloaded ? root.tr("downloaded") : root.tr("download")))
+                                                        text: root.activeTab === "surah" ? (isDownloading ? root.trArgs("downloading", [Model.reciterDisplayLabel(root.currentReciter, root.lang())]) : (surahDownloaded ? root.tr("downloaded") : root.tr("download"))) : (isDownloading ? root.trArgs("downloading", [Model.reciterDisplayLabel(reciter, root.lang())]) : (fullDownloaded ? root.tr("downloaded") : root.tr("download")))
                                                         fontFamily: root.bar.fontFamily
                                                     }
                                                 }
