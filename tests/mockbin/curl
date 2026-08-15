@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Mock curl for download.sh tests. Behaviour is driven by env vars:
+#   MOCK_HEAD_MODE    head-ok | head-noctype | head-oversize | head-wrongtype | head-fail
+#   MOCK_GET_MODE     get-ok | get-hang | get-fail | get-slow | get-truncate
+#   MOCK_HEAD_BODY    override the HEAD response body
+#   MOCK_GET_BODY     bytes written to the -o target (default: fake-audio-bytes)
+#   MOCK_GET_FAIL_AT  exit code for the failing GET
+#   MOCK_HEAD_FAIL_EXIT exit code for the failing HEAD (default 56)
+#   MOCK_CURL_LOG     append every argv to this file (must be set)
+set -u
+
+echo "$*" >> "${MOCK_CURL_LOG:?}"
+
+OUT=""
+IS_HEAD=0
+MAXREDIRS=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o) OUT="${2:-}"; shift 2 ;;
+    -I) IS_HEAD=1; shift ;;
+    --max-redirs) MAXREDIRS="${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+if (( IS_HEAD )); then
+  # Redirect attempts must never happen: the script passes --max-redirs 0.
+  if [[ "$MAXREDIRS" != "0" ]]; then
+    echo "MOCK ERROR: --max-redirs not 0 ($MAXREDIRS)" >&2
+    exit 96
+  fi
+  case "${MOCK_HEAD_MODE:-head-ok}" in
+    head-ok)      printf 'HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Length: 1024\r\n\r\n' ;;
+    head-noctype) printf 'HTTP/1.1 200 OK\r\nContent-Length: 1024\r\n\r\n' ;;
+    head-oversize) printf 'HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Length: 999999999\r\n\r\n' ;;
+    head-wrongtype) printf 'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 1024\r\n\r\n' ;;
+    head-fail)    exit "${MOCK_HEAD_FAIL_EXIT:-56}" ;;
+    *)            printf '%s' "${MOCK_HEAD_BODY:-HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Length: 1024\r\n\r\n}" ;;
+  esac
+  exit 0
+fi
+
+# GET
+[[ -n "$OUT" ]] || { echo "MOCK ERROR: no -o target" >&2; exit 97; }
+case "${MOCK_GET_MODE:-get-ok}" in
+  get-ok)      printf '%s' "${MOCK_GET_BODY:-fake-audio-bytes}" > "$OUT" ;;
+  get-hang)    sleep "${MOCK_HANG_SECS:-30}" ;;
+  get-fail)    printf 'partial-data' > "$OUT"; exit "${MOCK_GET_FAIL_AT:-56}" ;;
+  get-slow)    printf 'partial-data' > "$OUT"; exit 28 ;;
+  get-truncate) printf 'partial-data' > "$OUT" ; exit 18 ;;
+  *)           printf '%s' "${MOCK_GET_BODY:-fake-audio-bytes}" > "$OUT" ;;
+esac
+exit 0
