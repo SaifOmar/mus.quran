@@ -67,6 +67,7 @@ Item {
   property int downloadTotal: 114
   property int downloadRevision: 0
   property string downloadReciter: ""   // reciter currently being downloaded
+  property var lastDownload: null       // { id, surah } for retry after failure
   readonly property string downloadScript: Quickshell.env("HOME") + "/.config/omarchy/plugins/mus.quran/download.sh"
   readonly property string cacheScript: Quickshell.env("HOME") + "/.config/omarchy/plugins/mus.quran/cache.sh"
   readonly property string cacheDir: Quickshell.env("HOME") + "/.cache/omarchy/quran"
@@ -166,9 +167,7 @@ Item {
   // remaining surahs can be fetched in one click. A decline with zero
   // downloads is respected.
   function shouldPrompt(id) {
-    if (root.isDownloaded(id)) return false
-    if (root.reciterStatus[id] === "declined" && !root.hasAnyDownloaded(id)) return false
-    return true
+    return !root.isDownloaded(id) && root.reciterStatus[id] === undefined
   }
 
   function hasAnyDownloaded(id) {
@@ -550,6 +549,8 @@ Item {
       return
     }
     root.downloading = true
+    root.downloadReciter = id
+    root.lastDownload = { id: id, surah: n }
     root.downloadDone = 0
     root.downloadTotal = 1
     root.errorMessage = ""
@@ -584,6 +585,8 @@ Item {
       if (root.cacheFiles[id + ":" + missing[j]]) promoteList.push(missing[j])
     }
     root.downloading = true
+    root.downloadReciter = id
+    root.lastDownload = { id: id, surah: 0 }
     // Progress reflects overall mushaf completion: already-downloaded surahs
     // plus cached ones being promoted form the baseline, then download.sh's
     // per-surah progress adds on top (clamped to 114 in applyDownloadProgress).
@@ -625,6 +628,7 @@ Item {
 
   function finishMushafDownload(id) {
     root.downloading = false
+    root.downloadReciter = ""
     root.downloadDone = 114
     root.downloadTotal = 114
     downloadProc.targetReciter = null
@@ -635,6 +639,15 @@ Item {
     root.downloadedSurahs = next
     root.downloadRevision++
     root.saveState()
+  }
+
+  function retryDownload() {
+    if (!root.lastDownload || root.downloading) return
+    root.errorMessage = ""
+    if (root.lastDownload.surah > 0)
+      root.downloadSurah(root.lastDownload.id, root.lastDownload.surah)
+    else
+      root.downloadMushaf(root.lastDownload.id)
   }
 
   function applyDownloadProgress(line) {
@@ -1082,18 +1095,23 @@ Item {
           id = null
           n = 0
         }
-      } else if (id) {
+        } else if (id) {
         if (n > 0) {
           // Single-surah failure: surface it through the existing inline
           // error pattern; the icon reverts and a retry re-runs download.sh.
           root.errorMessage = Model.tr(root.language, "downloadFailed")
-        } else if (root.reciterStatus[id] !== "downloaded" && root.reciterStatus[id] !== "declined") {
+        } else {
           // Partial mushaf: keep what finished; a retry resumes (curl -C -).
-          root.setReciterStatus(id, "failed")
+          // Always surface the failure, including a previously-declined
+          // reciter; the old branch made an instant script failure invisible.
+          root.errorMessage = Model.tr(root.language, "downloadFailed")
+          if (root.reciterStatus[id] !== "downloaded")
+            root.setReciterStatus(id, "failed")
         }
       }
       downloadProc.targetReciter = null
       downloadProc.targetSurah = 0
+      root.downloadReciter = ""
     }
   }
 

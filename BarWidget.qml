@@ -69,12 +69,8 @@ BarWidget {
         if (!quranService)
             return;
         var id = quranService.reciterId || Model.DEFAULT_RECITER;
-        if (quranService.shouldPrompt(id))
-            root.pendingDownloadReciter = quranService.reciterFor(id) || {
-                identifier: id,
-                name: "",
-                englishName: id
-            };
+        // Playing is always streaming-by-default. Downloading is an explicit
+        // action on the row icon or in the reciter tab.
         quranService.playSurah(id, n);
         root.close();
     }
@@ -561,7 +557,10 @@ BarWidget {
                                     onClicked: {
                                         if (!quranService)
                                             return;
-                                        quranService.retry();
+                                        if (quranService.lastDownload && quranService.errorMessage === root.tr("downloadFailed"))
+                                            quranService.retryDownload();
+                                        else
+                                            quranService.retry();
                                     }
                                 }
                             }
@@ -668,7 +667,7 @@ BarWidget {
                                                 downloadRevision;
                                                 return root.activeTab === "surah" && quranService ? quranService.isSurahDownloaded(quranService.reciterId, surah.number) : false;
                                             }
-                                            readonly property bool isDownloading: root.activeTab === "surah" ? (quranService ? (quranService.isSurahDownloading(quranService.reciterId, surah.number) || quranService.isReciterDownloading(quranService.reciterId)) : false) : (quranService ? quranService.isReciterDownloading(reciter.identifier) : false)
+                                            readonly property bool isDownloading: root.activeTab === "surah" ? (quranService ? quranService.isSurahDownloading(quranService.reciterId, surah.number) : false) : (quranService ? quranService.isReciterDownloading(reciter.identifier) : false)
                                             readonly property int downloadPercent: isDownloading && quranService && quranService.downloadTotal > 0 ? Math.min(100, Math.round(100 * quranService.downloadDone / quranService.downloadTotal)) : 0
 
                                             readonly property color rowTitle: selected ? Qt.lighter(root.accentC, 1.2) : root.fg
@@ -777,7 +776,7 @@ BarWidget {
                                                         Text {
                                                             anchors.centerIn: parent
                                                             anchors.verticalCenterOffset: -5
-                                                            text: "󰇚"
+                                                            text: "⟳"
                                                             color: root.accentC
                                                             font.family: root.bar.fontFamily
                                                             font.pixelSize: Style.font.bodySmall
@@ -812,7 +811,7 @@ BarWidget {
                                                             if (!quranService || isDownloading)
                                                                 return;
                                                             if (root.activeTab === "surah")
-                                                                Quickshell.execDetached(["omarchy-shell", "quran", "download", quranService.reciterId]);
+                                                                Quickshell.execDetached(["omarchy-shell", "quran", "download", quranService.reciterId, String(surah.number)]);
                                                             else
                                                                 Quickshell.execDetached(["omarchy-shell", "quran", "download", reciter.identifier]);
                                                         }
@@ -1069,8 +1068,12 @@ BarWidget {
                     horizontalPadding: Style.spacing.controlPaddingX
                     verticalPadding: Style.spacing.controlPaddingY
                     onClicked: {
-                        if (quranService && root.pendingDownloadReciter)
+                        if (quranService && root.pendingDownloadReciter) {
                             quranService.downloadMushaf(root.pendingDownloadReciter.identifier);
+                            // The prompt is only a first-selection decision;
+                            // progress must not keep a modal panel over the UI.
+                            root.pendingDownloadReciter = null;
+                        }
                     }
                 }
 
