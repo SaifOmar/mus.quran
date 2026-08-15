@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "mus.quran",
   "name": "Quran",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "author": "Saif",
   "license": "MIT",
   "description": "Quran recitation player with reciter and surah selection. Requires mpv (with mpv-mpris for system media control).",
