@@ -161,9 +161,30 @@ Item {
   }
 
   // First time a reciter is touched (no status recorded yet), the widget
-  // should prompt the user about downloading the full mushaf.
+  // should prompt the user about downloading the full mushaf. Also re-prompt
+  // partially-downloaded reciters (even if previously declined) so the
+  // remaining surahs can be fetched in one click. A decline with zero
+  // downloads is respected.
   function shouldPrompt(id) {
-    return root.reciterStatus[id] === undefined
+    if (root.isDownloaded(id)) return false
+    if (root.reciterStatus[id] === "declined" && !root.hasAnyDownloaded(id)) return false
+    return true
+  }
+
+  function hasAnyDownloaded(id) {
+    for (var i = 1; i <= 114; i++) {
+      if (root.downloadedSurahs[id + ":" + i]) return true
+    }
+    return false
+  }
+
+  // Count of this reciter's surahs not yet available offline.
+  function missingCount(id) {
+    var count = 0
+    for (var i = 1; i <= 114; i++) {
+      if (!root.isSurahDownloaded(id, i)) count++
+    }
+    return count
   }
 
   function setReciterStatus(id, status) {
@@ -535,7 +556,10 @@ Item {
     downloadProc.targetReciter = id
     downloadProc.targetSurah = n
     var reciter = root.reciterFor(id)
-    var cmd = ["bash", root.downloadScript, id, String(n)]
+    // stdbuf -oL: download.sh echo progress lines must arrive line-buffered
+    // (piped stdout would otherwise only flush at process exit, freezing the
+    // progress UI at 0% for the whole download).
+    var cmd = ["stdbuf", "-oL", "bash", root.downloadScript, id, String(n)]
     if (reciter && reciter.server) {
       cmd.push("--server")
       cmd.push(reciter.server)
@@ -560,9 +584,13 @@ Item {
       if (root.cacheFiles[id + ":" + missing[j]]) promoteList.push(missing[j])
     }
     root.downloading = true
-    root.downloadDone = promoteList.length
+    // Progress reflects overall mushaf completion: already-downloaded surahs
+    // plus cached ones being promoted form the baseline, then download.sh's
+    // per-surah progress adds on top (clamped to 114 in applyDownloadProgress).
+    var baseline = (114 - missing.length) + promoteList.length
+    root.downloadDone = baseline
     root.downloadTotal = 114
-    root.downloadBaseline = promoteList.length
+    root.downloadBaseline = baseline
     root.errorMessage = ""
     root.mushafPlan = { id: id, allMissing: missing }
     if (promoteList.length > 0) root.promoteRun(id, promoteList)
@@ -586,7 +614,7 @@ Item {
     downloadProc.targetReciter = id
     downloadProc.targetSurah = 0
     var reciter = root.reciterFor(id)
-    var cmd = ["bash", root.downloadScript, id, "--only", list.join(",")]
+    var cmd = ["stdbuf", "-oL", "bash", root.downloadScript, id, "--only", list.join(",")]
     if (reciter && reciter.server) {
       cmd.push("--server")
       cmd.push(reciter.server)
@@ -597,6 +625,8 @@ Item {
 
   function finishMushafDownload(id) {
     root.downloading = false
+    root.downloadDone = 114
+    root.downloadTotal = 114
     downloadProc.targetReciter = null
     downloadProc.targetSurah = 0
     root.setReciterStatus(id, "downloaded")
@@ -611,7 +641,7 @@ Item {
     var m = String(line).match(/^progress\s+(\d+)\/(\d+)\s*$/)
     if (!m) return
     if (downloadProc.targetSurah === 0) {
-      root.downloadDone = root.downloadBaseline + parseInt(m[1])
+      root.downloadDone = Math.min(114, root.downloadBaseline + parseInt(m[1]))
       root.downloadTotal = 114
     } else {
       root.downloadDone = parseInt(m[1])
@@ -742,8 +772,8 @@ Item {
           var n = plan.allMissing[i]
           if (moved.indexOf(String(n)) === -1) remaining.push(n)
         }
-        root.downloadBaseline = moved.length
-        root.downloadDone = moved.length
+        // downloadBaseline/downloadDone were set in downloadMushaf and already
+        // include the promoted files — keep them, download.sh adds on top.
         if (remaining.length > 0) root.startMushafDownload(plan.id, remaining)
         else root.finishMushafDownload(plan.id)
       }

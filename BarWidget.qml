@@ -995,7 +995,19 @@ BarWidget {
 
             Text {
                 width: parent.width
-                text: quranService && quranService.downloading ? root.trArgs("downloading", [root.pendingDownloadReciter ? Model.reciterDisplayLabel(root.pendingDownloadReciter, root.lang()) : ""]) : root.tr("downloadDesc")
+                text: {
+                    if (!quranService)
+                        return "";
+                    if (quranService.downloading)
+                        return root.trArgs("downloading", [root.pendingDownloadReciter ? Model.reciterDisplayLabel(root.pendingDownloadReciter, root.lang()) : ""]);
+                    var id = root.pendingDownloadReciter ? root.pendingDownloadReciter.identifier : "";
+                    if (id) {
+                        var missing = quranService.missingCount(id);
+                        if (missing > 0 && missing < 114)
+                            return root.trArgs("downloadRemaining", [String(missing)]);
+                    }
+                    return root.tr("downloadDesc");
+                }
                 color: root.mutedC
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.bodySmall
@@ -1011,7 +1023,7 @@ BarWidget {
                 visible: quranService && quranService.downloading
 
                 Rectangle {
-                    width: parent.width * (quranService && quranService.downloadTotal > 0 ? quranService.downloadDone / quranService.downloadTotal : 0)
+                    width: parent.width * (quranService && quranService.downloadTotal > 0 ? Math.min(1, quranService.downloadDone / quranService.downloadTotal) : 0)
                     height: parent.height
                     radius: Style.cornerRadius
                     color: root.accentC
