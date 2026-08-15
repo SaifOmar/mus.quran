@@ -561,8 +561,7 @@ BarWidget {
                                     onClicked: {
                                         if (!quranService)
                                             return;
-                                        quranService.errorMessage = "";
-                                        quranService.playSurah(quranService.reciterId, quranService.surahNumber);
+                                        quranService.retry();
                                     }
                                 }
                             }
@@ -570,7 +569,7 @@ BarWidget {
                             Text {
                                 width: parent.width
                                 visible: quranService && quranService.recitersLoading
-                                text: root.tr("reciterLoadFailed")
+                                text: root.tr("loadingReciters")
                                 color: root.mutedC
                                 font.family: root.bar.fontFamily
                                 font.pixelSize: Style.font.caption

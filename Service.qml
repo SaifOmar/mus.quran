@@ -59,6 +59,7 @@ Item {
   // --- errors / status ---
   property string errorMessage: ""
   property bool recitersLoading: false
+  property bool catalogError: false      // last failure was the reciter fetch, not playback
 
   // --- download state (shared between widget + IPC) ---
   property bool downloading: false
@@ -796,9 +797,23 @@ Item {
     try { dataAr = JSON.parse(jsonAr || "") } catch (e) { dataAr = null }
     root.reciters = Model.parseReciters(dataEng, dataAr)
     root.recitersLoading = false
+    root.catalogError = false
     if (!root.currentReciter) root.reciterId = Model.DEFAULT_RECITER
     if (root.reciters.length > 0) root.catalogFetchedAt = Date.now()
     root.saveState()
+  }
+
+  // Retry the last failed action: a failed catalog fetch refetches the reciter
+  // list; a playback failure re-attempts playback. (Retrying playback when the
+  // catalog is empty is pointless because there is nothing to list/validate.)
+  function retry() {
+    root.errorMessage = ""
+    if (root.catalogError || root.reciters.length === 0) {
+      root.catalogError = false
+      root.fetchReciters()
+      return
+    }
+    root.playSurah(root.reciterId, root.surahNumber)
   }
 
   // --- state persistence ----------------------------------------------------
@@ -840,8 +855,16 @@ Item {
         && data.surahNumber >= 1 && data.surahNumber <= 114) root.surahNumber = data.surahNumber
 
     if (Array.isArray(data.reciters) && data.reciters.length > 0) {
-      root.reciters = data.reciters
-      if (!root.currentReciter) root.reciterId = Model.DEFAULT_RECITER
+      // Re-validate persisted catalog entries (a stale/tampered state file
+      // must not reintroduce an unsafe `server` or identifier).
+      var safeReciters = []
+      for (var ri = 0; ri < data.reciters.length; ri++) {
+        if (Model.isSafeReciter(data.reciters[ri])) safeReciters.push(data.reciters[ri])
+      }
+      if (safeReciters.length > 0) {
+        root.reciters = safeReciters
+        if (!root.currentReciter) root.reciterId = Model.DEFAULT_RECITER
+      }
     }
     if (typeof data.catalogFetchedAt === "number") root.catalogFetchedAt = data.catalogFetchedAt
     if (data.reciterStatus && typeof data.reciterStatus === "object") root.reciterStatus = data.reciterStatus
@@ -990,6 +1013,7 @@ Item {
     onExited: function(exitCode) {
       if (exitCode !== 0) {
         root.recitersLoading = false
+        root.catalogError = true
         root.errorMessage = Model.tr(root.language, "reciterLoadFailed")
       }
     }

@@ -39,11 +39,13 @@ omarchy bar move mus.quran --section right
 
 The service exposes an `IpcHandler` targeting `quran` with `status`,
 `playPause`, `next`, `previous`, `seek(ms)`, `playSurah(id,n)`,
-`setLanguage(code)`, and `ping`.
+`download(id[,n])`, `setMode(mode)`, `setLanguage(code)`, `clearCache`,
+`cacheInfo`, and `ping`.
 
 ## State
 
-- State: `~/.local/state/omarchy/quran`
+- Reciter/playback state: `~/.local/state/omarchy/settings/quran.json`
+- Explicit downloads: `~/.local/state/omarchy/quran/<reciter>/`
 - Cache: `~/.cache/omarchy/quran`
 
 ## Remove

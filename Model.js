@@ -59,6 +59,7 @@ var STRINGS = {
     clearCache: "Clear cache", cacheSize: "Cache: %1", downloadFailed: "Download failed",
     mpvMissing: "Playback unavailable — is mpv installed?",
     settings: "Settings", storage: "Storage & Cache", clear: "Clear",
+    loadingReciters: "Loading reciters…",
   },
   ar: {
     tabSurah: "السورة", tabReciter: "القارئ",
@@ -72,6 +73,7 @@ var STRINGS = {
     noResults: "لا توجد نتائج لـ \"%1\"", retry: "إعادة المحاولة",
     noAudio: "لا يتوفر صوت لهذا القارئ",
     reciterLoadFailed: "تعذّر تحميل القُرّاء",
+    loadingReciters: "جارٍ تحميل القُرّاء…",
     playbackFailed: "فشل التشغيل. أعد المحاولة أو قم بالبث.",
     downloaded: "تم التنزيل", partial: "جزئي", notDownloaded: "لم يتم التنزيل",
     tooltip: "القرآن", nowPlaying: "قيد التشغيل · %1",
@@ -95,6 +97,7 @@ var STRINGS = {
     noResults: "Aucun résultat pour \"%1\"", retry: "Réessayer",
     noAudio: "Aucun audio disponible pour ce récitant",
     reciterLoadFailed: "Impossible de charger les récitants",
+    loadingReciters: "Chargement des récitants…",
     playbackFailed: "Échec de lecture. Réessayez ou passez en streaming.",
     downloaded: "Téléchargé", partial: "Partiel", notDownloaded: "Non téléchargé",
     tooltip: "Coran", nowPlaying: "Lecture en cours · %1",
@@ -118,6 +121,7 @@ var STRINGS = {
     noResults: "Sin resultados para \"%1\"", retry: "Reintentar",
     noAudio: "No hay audio disponible para este recitador",
     reciterLoadFailed: "No se pudieron cargar los recitadores",
+    loadingReciters: "Cargando recitadores…",
     playbackFailed: "Error de reproducción. Reintenta o usa streaming.",
     downloaded: "Descargado", partial: "Parcial", notDownloaded: "No descargado",
     tooltip: "Corán", nowPlaying: "Reproduciendo · %1",
@@ -141,6 +145,7 @@ var STRINGS = {
     noResults: "\"%1\" için sonuç yok", retry: "Yeniden dene",
     noAudio: "Bu okuyucu için ses yok",
     reciterLoadFailed: "Okuyucular yüklenemedi",
+    loadingReciters: "Okuyucular yükleniyor…",
     playbackFailed: "Oynatma başarısız. Yeniden deneyin veya akış kullanın.",
     downloaded: "İndirildi", partial: "Kısmi", notDownloaded: "İndirilmedi",
     tooltip: "Kuran", nowPlaying: "Şu an çalıyor · %1",
@@ -164,6 +169,7 @@ var STRINGS = {
     noResults: "Tidak ada hasil untuk \"%1\"", retry: "Coba lagi",
     noAudio: "Tidak ada audio untuk qari ini",
     reciterLoadFailed: "Gagal memuat daftar qari",
+    loadingReciters: "Memuat daftar qari…",
     playbackFailed: "Pemutaran gagal. Coba lagi atau gunakan streaming.",
     downloaded: "Terunduh", partial: "Sebagian", notDownloaded: "Belum diunduh",
     tooltip: "Al-Qur'an", nowPlaying: "Sedang diputar · %1",
@@ -187,6 +193,7 @@ var STRINGS = {
     noResults: "\"%1\" کے لیے کوئی نتیجہ نہیں", retry: "دوبارہ کوشش",
     noAudio: "اس قاری کے لیے آڈیو دستیاب نہیں",
     reciterLoadFailed: "قاریوں کی فہرست لوڈ نہیں ہو سکی",
+    loadingReciters: "قاریوں کی فہرست لوڈ ہو رہی ہے…",
     playbackFailed: "پلے بیک ناکام۔ دوبارہ کوشش کریں یا سٹریم کریں۔",
     downloaded: "ڈاؤن لوڈ شدہ", partial: "جزوی", notDownloaded: "ڈاؤن لوڈ نہیں ہوا",
     tooltip: "قرآن", nowPlaying: "چل رہا ہے · %1",
@@ -210,6 +217,7 @@ var STRINGS = {
     noResults: "\"%1\" এর জন্য কোনো ফলাফল নেই", retry: "আবার চেষ্টা",
     noAudio: "এই ক্বারীর জন্য অডিও নেই",
     reciterLoadFailed: "ক্বারীদের তালিকা লোড করা যায়নি",
+    loadingReciters: "ক্বারীদের তালিকা লোড হচ্ছে…",
     playbackFailed: "প্লেব্যাক ব্যর্থ। আবার চেষ্টা করুন বা স্ট্রিম করুন।",
     downloaded: "ডাউনলোড হয়েছে", partial: "আংশিক", notDownloaded: "ডাউনলোড হয়নি",
     tooltip: "কুরআন", nowPlaying: "চলছে · %1",
@@ -233,6 +241,7 @@ var STRINGS = {
     noResults: "Нет результатов для \"%1\"", retry: "Повторить",
     noAudio: "Для этого чтеца аудио недоступно",
     reciterLoadFailed: "Не удалось загрузить чтецов",
+    loadingReciters: "Загрузка чтецов…",
     playbackFailed: "Ошибка воспроизведения. Повторите или включите стриминг.",
     downloaded: "Скачано", partial: "Частично", notDownloaded: "Не скачано",
     tooltip: "Коран", nowPlaying: "Сейчас играет · %1",
@@ -256,6 +265,7 @@ var STRINGS = {
     noResults: "没有“%1”的结果", retry: "重试",
     noAudio: "该诵读者没有可用音频",
     reciterLoadFailed: "无法加载诵读者列表",
+    loadingReciters: "正在加载诵读者列表…",
     playbackFailed: "播放失败。请重试或改用流播放。",
     downloaded: "已下载", partial: "部分", notDownloaded: "未下载",
     tooltip: "古兰经", nowPlaying: "正在播放 · %1",
@@ -270,9 +280,9 @@ var STRINGS = {
 }
 
 function tr(lang, key) {
-  var table = STRINGS[lang] || STRINGS[en] || {}
+  var table = STRINGS[lang] || STRINGS["en"] || {}
   var s = table[key]
-  if (s === undefined) s = STRINGS[en][key]
+  if (s === undefined && STRINGS["en"]) s = STRINGS["en"][key]
   return (s === undefined) ? key : String(s)
 }
 
@@ -316,17 +326,20 @@ function parseReciters(json, jsonAr) {
         }
       }
       if (!m) m = r.moshaf[0]
-      if (!m || !m.server) continue
+      if (!m) continue
+      var server = sanitizeServer(m.server)
+      if (server === "") continue
 
       var identifier = "mp3quran_" + r.id
       if (r.id === 123 || (r.name && r.name.indexOf("Mishary Alafasi") !== -1)) identifier = "ar.alafasy"
+      if (!isSafeIdentifier(identifier)) continue
 
       outMp3.push({
         identifier: identifier,
         id: String(r.id),
         name: arMap[r.id] || String(r.name || ""),
         englishName: String(r.name || ""),
-        server: String(m.server)
+        server: server
       })
     }
     outMp3.sort(function(a, b) {
@@ -342,10 +355,12 @@ function parseReciters(json, jsonAr) {
   for (var idx = 0; idx < data.length; idx++) {
     var rec = data[idx]
     if (!rec || !rec.identifier) continue
+    var identifier = String(rec.identifier)
+    if (!isSafeIdentifier(identifier)) continue
     var levels = rec.audioLevels || []
     if (levels.indexOf("surah") === -1) continue
     out.push({
-      identifier: String(rec.identifier),
+      identifier: identifier,
       name: String(rec.name || ""),
       englishName: String(rec.englishName || ""),
       levels: levels
@@ -471,16 +486,175 @@ function filterReciters(reciters, query) {
   return out
 }
 
+// --- URL safety (catalog SSRF hardening) ----------------------------------
+// Catalog `server` values are untrusted. Before a URL is given to curl or mpv
+// it must be https, on an allowlisted audio CDN, with a public host (no
+// loopback/private/link-local/ULA, no IPv4-mapped IPv6, no userinfo/query/
+// fragment). Identifiers used as path segments are similarly restricted.
+
+var SAFE_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+var ALLOWED_AUDIO_HOST_SUFFIXES = ["mp3quran.net", "islamic.app"]
+
+function isSafeIdentifier(id) {
+  if (typeof id !== "string" || id.length === 0 || id.length > 64) return false
+  if (!SAFE_IDENTIFIER_RE.test(id)) return false
+  if (id === "." || id === "..") return false
+  return true
+}
+
+function _stripTrailingDots(host) {
+  var h = String(host)
+  while (h.length > 0 && h.charAt(h.length - 1) === ".") h = h.substring(0, h.length - 1)
+  return h
+}
+
+function _parseIpv4(host) {
+  var h = _stripTrailingDots(host)
+  var parts = h.split(".")
+  if (parts.length < 2 || parts.length > 4) return null
+  var nums = []
+  for (var i = 0; i < parts.length; i++) {
+    // Decimal octets only. Hex/octal encodings (0x7f, 0177) are rejected.
+    if (!/^[0-9]+$/.test(parts[i])) return null
+    if (parts[i].length > 1 && parts[i].charAt(0) === "0") return null
+    var n = parseInt(parts[i], 10)
+    if (isNaN(n) || n < 0 || n > 255) return null
+    nums.push(n)
+  }
+  while (nums.length < 4) nums.splice(nums.length - 1, 0, 0)
+  return nums
+}
+
+function _looksLikeIpv4(host) {
+  var h = _stripTrailingDots(host)
+  var parts = h.split(".")
+  if (parts.length < 2 || parts.length > 4) return false
+  for (var i = 0; i < parts.length; i++) {
+    if (!/^(0x[0-9a-f]+|0[0-7]*|[0-9]+)$/i.test(parts[i])) return false
+  }
+  return true
+}
+
+function _isBlockedIpv4(parts) {
+  if (!parts || parts.length !== 4) return true
+  var a = parts[0], b = parts[1]
+  if (a === 0 || a === 10 || a === 127) return true
+  if (a === 169 && b === 254) return true           // link-local
+  if (a === 172 && b >= 16 && b <= 31) return true  // private
+  if (a === 192 && b === 168) return true           // private
+  if (a === 100 && b >= 64 && b <= 127) return true // CGNAT
+  return false
+}
+
+function isAllowedAudioHost(host) {
+  if (!host) return false
+  var h = _stripTrailingDots(String(host).toLowerCase())
+  for (var i = 0; i < ALLOWED_AUDIO_HOST_SUFFIXES.length; i++) {
+    var s = ALLOWED_AUDIO_HOST_SUFFIXES[i]
+    if (h === s) return true
+    if (h.length > s.length + 1 && h.substring(h.length - s.length - 1) === "." + s) return true
+  }
+  return false
+}
+
+// isBlockedHost(host) — true for loopback/private/link-local/ULA addresses and
+// clearly-internal hostnames (localhost, *.local, *.internal, *.localhost,
+// single-label). IPv4-mapped IPv6 and short/hex/octal IPv4 forms are blocked.
+function isBlockedHost(host) {
+  if (!host) return true
+  var h = _stripTrailingDots(String(host).toLowerCase())
+  if (!h) return true
+  if (h === "localhost" || h === "local") return true
+  if (h.length > 10 && h.substring(h.length - 10) === ".localhost") return true
+  if (h.indexOf(".local") !== -1 || h.indexOf(".internal") !== -1) return true
+  if (h.indexOf(":") !== -1) {
+    if (h === "::" || h === "::1" || h === "0:0:0:0:0:0:0:1" || h === "0:0:0:0:0:0:0:0") return true
+    // IPv4-mapped / IPv4-compatible (e.g. ::ffff:127.0.0.1, ::ffff:7f00:1)
+    if (h.indexOf("ffff:") !== -1 || h.indexOf(":ffff") !== -1) return true
+    if (/:\d+\.\d+\.\d+\.\d+$/.test(h)) return true
+    if (h.indexOf("fe8") === 0 || h.indexOf("fe9") === 0
+        || h.indexOf("fea") === 0 || h.indexOf("feb") === 0
+        || h.indexOf("fec") === 0 || h.indexOf("fc") === 0
+        || h.indexOf("fd") === 0) return true
+    return false
+  }
+  if (h.indexOf(".") === -1) return true
+  if (_looksLikeIpv4(h)) {
+    var parts = _parseIpv4(h)
+    if (!parts) return true
+    return _isBlockedIpv4(parts)
+  }
+  return false
+}
+
+// isSafeServerPrefix(value) — true for an absolute http(s) URL on an
+// allowlisted audio CDN, no userinfo, no query, no fragment, no control chars.
+function isSafeServerPrefix(value) {
+  if (typeof value !== "string") return false
+  var url = value.trim()
+  if (url.length === 0 || url.length > 512) return false
+  if (/[\x00-\x20\x7f]/.test(url)) return false
+  var m = url.match(/^(https?):\/\/([^/?#]+)/)
+  if (!m) return false
+  if (url.indexOf("#") !== -1 || url.indexOf("?") !== -1) return false
+  var authority = m[2]
+  if (authority.indexOf("@") !== -1) return false
+  var host = authority
+  if (host.charAt(0) === "[") {
+    var close = host.indexOf("]")
+    if (close === -1) return false
+    host = host.substring(1, close)
+  } else {
+    var lastColon = host.lastIndexOf(":")
+    if (lastColon !== -1) host = host.substring(0, lastColon)
+  }
+  if (!/^[A-Za-z0-9.:-]+$/.test(host) && host.indexOf(":") === -1) return false
+  if (isBlockedHost(host)) return false
+  return isAllowedAudioHost(host)
+}
+
+// sanitizeServer(value) — validated server prefix with a trailing slash, or "".
+function sanitizeServer(value) {
+  if (!isSafeServerPrefix(value)) return ""
+  var url = String(value).trim()
+  if (url.charAt(url.length - 1) !== "/") url += "/"
+  return url
+}
+
+// isSafeRemoteUrl(url) — final-url guard applied after URL construction.
+function isSafeRemoteUrl(url) {
+  return isSafeServerPrefix(url)
+}
+
+// isSafeReciter(reciter) — server prefix and identifier are both safe.
+function isSafeReciter(reciter) {
+  if (!reciter) return false
+  if (!isSafeIdentifier(reciter.identifier)) return false
+  if (reciter.server !== undefined && reciter.server !== null) {
+    if (sanitizeServer(reciter.server) === "") return false
+  }
+  return true
+}
+
 // --- audio ----------------------------------------------------------------
 
 function audioUrl(reciterId, surahNumber, reciterObj) {
-  if (reciterObj && reciterObj.server)
-    return reciterObj.server + pad3(surahNumber) + ".mp3"
+  var n = Number(surahNumber)
+  if (!isValidSurahNumber(n)) return ""
+  if (reciterObj && reciterObj.server) {
+    var url = sanitizeServer(reciterObj.server)
+    if (url === "") return ""
+    url = url + pad3(n) + ".mp3"
+    return isSafeRemoteUrl(url) ? url : ""
+  }
   var providerId = reciterId === "ar.ajamy" ? "ar.ahmedajamy" : reciterId
-  return CDN_BASE + "/" + providerId + "/" + Number(surahNumber) + ".mp3"
+  if (!isSafeIdentifier(providerId)) return ""
+  return CDN_BASE + "/" + providerId + "/" + n + ".mp3"
 }
 
 function localAudioUrl(dataDir, reciterId, surahNumber) {
+  if (typeof dataDir !== "string" || dataDir.indexOf("..") !== -1) return ""
+  if (!isSafeIdentifier(reciterId) || !isValidSurahNumber(Number(surahNumber))) return ""
   return "file://" + dataDir + "/" + reciterId + "/" + Number(surahNumber) + ".mp3"
 }
 
