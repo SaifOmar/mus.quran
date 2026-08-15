@@ -25,6 +25,8 @@ var API_RECITERS_AR = "https://mp3quran.net/api/v3/reciters?language=ar"
 
 var STATE_VERSION = 2
 var CATALOG_TTL_MS = 24 * 60 * 60 * 1000
+// Per-surah cap (~300 MB), shared with download.sh.
+var MAX_SURAH_BYTES = 314572800
 
 // --- playback modes ---
 var MODE_SINGLE = "single"       // play one surah, then stop
@@ -325,6 +327,7 @@ function parseReciters(json, jsonAr) {
     }
     var outMp3 = []
     for (var i = 0; i < data.length; i++) {
+      if (outMp3.length >= 1000) break
       var r = data[i]
       if (!r || !r.moshaf || !Array.isArray(r.moshaf) || r.moshaf.length === 0) continue
       var m = null
@@ -343,6 +346,10 @@ function parseReciters(json, jsonAr) {
       var identifier = "mp3quran_" + r.id
       if (r.id === 123 || (r.name && r.name.indexOf("Mishary Alafasi") !== -1)) identifier = "ar.alafasy"
       if (!isSafeIdentifier(identifier)) continue
+      // Field limits: a hostile catalog must not be able to smuggle huge
+      // strings into the UI or persisted state.
+      if (String(r.name || "").length > 200 || String(r.englishName || "").length > 200) continue
+      if ((arMap[r.id] || "").length > 200) continue
 
       outMp3.push({
         identifier: identifier,
@@ -363,12 +370,14 @@ function parseReciters(json, jsonAr) {
   // Legacy / fallback parsing
   var out = []
   for (var idx = 0; idx < data.length; idx++) {
+    if (out.length >= 1000) break
     var rec = data[idx]
     if (!rec || !rec.identifier) continue
     var identifier = String(rec.identifier)
     if (!isSafeIdentifier(identifier)) continue
     var levels = rec.audioLevels || []
     if (levels.indexOf("surah") === -1) continue
+    if (String(rec.name || "").length > 200 || String(rec.englishName || "").length > 200) continue
     out.push({
       identifier: identifier,
       name: String(rec.name || ""),
@@ -547,12 +556,17 @@ function _looksLikeIpv4(host) {
 
 function _isBlockedIpv4(parts) {
   if (!parts || parts.length !== 4) return true
-  var a = parts[0], b = parts[1]
+  var a = parts[0], b = parts[1], c = parts[2]
   if (a === 0 || a === 10 || a === 127) return true
   if (a === 169 && b === 254) return true           // link-local
   if (a === 172 && b >= 16 && b <= 31) return true  // private
   if (a === 192 && b === 168) return true           // private
   if (a === 100 && b >= 64 && b <= 127) return true // CGNAT
+  if (a >= 224 && a <= 255) return true             // multicast + reserved 240/4
+  if (a === 192 && b === 0 && c === 0) return true  // 192.0.0.0/24
+  if (a === 192 && b === 0 && c === 2) return true  // TEST-NET-1 (192.0.2.0/24)
+  if (a === 198 && b === 51 && c === 100) return true  // TEST-NET-2 (198.51.100.0/24)
+  if (a === 203 && b === 0 && c === 113) return true   // TEST-NET-3 (203.0.113.0/24)
   return false
 }
 
@@ -597,26 +611,54 @@ function isBlockedHost(host) {
   return false
 }
 
-// isSafeServerPrefix(value) — true for an absolute http(s) URL on an
-// allowlisted audio CDN, no userinfo, no query, no fragment, no control chars.
+// _isValidPort(p) — strict port: non-empty, decimal digits only, no leading
+// zeros, 1..65535.
+function _isValidPort(p) {
+  if (typeof p !== "string" || p.length === 0) return false
+  if (!/^[0-9]+$/.test(p)) return false
+  if (p.length > 1 && p.charAt(0) === "0") return false
+  var n = parseInt(p, 10)
+  return !isNaN(n) && n >= 1 && n <= 65535
+}
+
+// isSafeServerPrefix(value) — true for an absolute https URL on an
+// allowlisted audio CDN, no userinfo, no query, no fragment, no control chars,
+// no encoded delimiters, valid port, safe host.
 function isSafeServerPrefix(value) {
   if (typeof value !== "string") return false
   var url = value.trim()
   if (url.length === 0 || url.length > 512) return false
   if (/[\x00-\x20\x7f]/.test(url)) return false
-  var m = url.match(/^(https?):\/\/([^/?#]+)/)
+  // Encoded delimiters (%2e %2f %3f %23 %40 %5c, case-insensitive) can be used
+  // to smuggle path/userinfo/query structure past naive URL checks.
+  if (/%(?:2e|2f|3f|23|40|5c)/i.test(url)) return false
+  var m = url.match(/^(https):\/\/([^/?#]+)/)
   if (!m) return false
   if (url.indexOf("#") !== -1 || url.indexOf("?") !== -1) return false
   var authority = m[2]
   if (authority.indexOf("@") !== -1) return false
   var host = authority
   if (host.charAt(0) === "[") {
-    var close = host.indexOf("]")
+    // Bracketed IPv6: inner literal must be hex/colon-only, contain >= 1
+    // colon, and carry no zone id. Anything after the bracket must be a port.
+    var close = authority.indexOf("]")
     if (close === -1) return false
-    host = host.substring(1, close)
+    var inner = authority.substring(1, close)
+    if (!/^[0-9a-fA-F:]+$/.test(inner)) return false
+    if (inner.indexOf(":") === -1) return false
+    if (inner.indexOf("%") !== -1) return false
+    host = inner
+    var after = authority.substring(close + 1)
+    if (after !== "") {
+      if (after.charAt(0) !== ":") return false
+      if (!_isValidPort(after.substring(1))) return false
+    }
   } else {
     var lastColon = host.lastIndexOf(":")
-    if (lastColon !== -1) host = host.substring(0, lastColon)
+    if (lastColon !== -1) {
+      if (!_isValidPort(host.substring(lastColon + 1))) return false
+      host = host.substring(0, lastColon)
+    }
   }
   if (!/^[A-Za-z0-9.:-]+$/.test(host) && host.indexOf(":") === -1) return false
   if (isBlockedHost(host)) return false
@@ -646,6 +688,58 @@ function isSafeReciter(reciter) {
   return true
 }
 
+// --- IPC / CLI argument parsers (strict; used by QML IPC and download.sh
+// companion logic). These never throw and never accept junk like "1junk".
+
+// isSafeReciterArg(id) — a reciter id usable as a path segment: alnum first,
+// letters/digits/dot/dash/underscore only, <= 64 chars. No "/" is possible,
+// so no traversal even with "." allowed mid-string.
+function isSafeReciterArg(id) {
+  return isSafeIdentifier(id)
+}
+
+// parseSurahArg(str) — strict decimal 1..114 (no leading zeros), or null.
+function parseSurahArg(str) {
+  if (typeof str !== "string") return null
+  if (!/^[0-9]+$/.test(str)) return null
+  if (str.length > 1 && str.charAt(0) === "0") return null
+  var n = parseInt(str, 10)
+  if (isNaN(n) || n < 1 || n > 114) return null
+  return n
+}
+
+// parseSeekArg(str) — strict optional-sign decimal, or null.
+function parseSeekArg(str) {
+  if (typeof str !== "string") return null
+  if (!/^-?[0-9]+$/.test(str)) return null
+  var v = parseInt(str, 10)
+  return isNaN(v) ? null : v
+}
+
+// --- fetch cooldown (per reciter:surah) ------------------------------------
+// After a failed fetch (or a forced playback error on a cached file), further
+// fetches for the same key are refused for COOLDOWN_MS. A caller cannot force
+// more than one real network fetch per reciter:surah inside the window, even
+// via repeated IPC or forced playback errors. Pure functions over a plain map
+// so the gate logic is independently testable; Service.qml owns the map.
+
+var COOLDOWN_MS = 10000
+
+function cooldownActive(map, key, now) {
+  if (!map || typeof key !== "string") return true
+  var until = map[key]
+  return typeof until === "number" && now < until
+}
+
+function markCooldown(map, key, now) {
+  if (!map || typeof key !== "string") return
+  map[key] = now + COOLDOWN_MS
+}
+
+function clearCooldown(map, key) {
+  if (map && typeof key === "string") delete map[key]
+}
+
 // --- audio ----------------------------------------------------------------
 
 function audioUrl(reciterId, surahNumber, reciterObj) {
@@ -659,7 +753,10 @@ function audioUrl(reciterId, surahNumber, reciterObj) {
   }
   var providerId = reciterId === "ar.ajamy" ? "ar.ahmedajamy" : reciterId
   if (!isSafeIdentifier(providerId)) return ""
-  return CDN_BASE + "/" + providerId + "/" + n + ".mp3"
+  var url = CDN_BASE + "/" + providerId + "/" + n + ".mp3"
+  // Run the constructed default-CDN URL through the same final-url guard as
+  // server-based URLs, for consistency.
+  return isSafeRemoteUrl(url) ? url : ""
 }
 
 function localAudioUrl(dataDir, reciterId, surahNumber) {

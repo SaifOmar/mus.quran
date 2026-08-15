@@ -38,6 +38,20 @@ BarWidget {
     readonly property var filteredSurahs: Model.filterSurahs(quranService ? quranService.surahs : [], root.surahQuery)
     readonly property var filteredReciters: Model.filterReciters(quranService ? quranService.reciters : [], root.reciterQuery)
 
+    // Filtering is cheap, but delegate creation is not. Coalesce rapid
+    // keystrokes so the virtualized list only receives settled queries.
+    Timer {
+        id: reciterSearchTimer
+        interval: 120
+        repeat: false
+        onTriggered: {
+            if (root.activeTab === "reciter") {
+                root.reciterQuery = searchField.text;
+                root.listCursor = 0;
+            }
+        }
+    }
+
     function lang() {
         return quranService ? quranService.language : Model.DEFAULT_LANGUAGE;
     }
@@ -626,30 +640,25 @@ BarWidget {
                                 onTextChanged: {
                                     if (root.activeTab === "surah")
                                         root.surahQuery = text;
-                                    else
-                                        root.reciterQuery = text;
-                                    root.listCursor = 0;
+                                    else {
+                                        reciterSearchTimer.restart();
+                                    }
+                                    if (root.activeTab === "surah")
+                                        root.listCursor = 0;
                                 }
                             }
 
-                            Flickable {
-                                id: listFlickable
+                            ListView {
+                                id: listView
                                 width: parent.width
-                                height: Math.min(260, listColumn.implicitHeight)
+                                height: Math.min(260, Math.max(Style.space(36), contentHeight))
                                 implicitHeight: height
                                 clip: true
-                                contentHeight: listColumn.implicitHeight
+                                spacing: Style.space(1)
                                 boundsBehavior: Flickable.StopAtBounds
+                                model: root.activeTab === "surah" ? root.filteredSurahs : root.filteredReciters
 
-                                Column {
-                                    id: listColumn
-                                    width: parent.width
-                                    spacing: Style.space(1)
-
-                                    Repeater {
-                                        model: root.activeTab === "surah" ? root.filteredSurahs : root.filteredReciters
-
-                                        delegate: BorderSurface {
+                                delegate: BorderSurface {
                                             id: rowDelegate
                                             required property var modelData
                                             required property int index
@@ -661,20 +670,19 @@ BarWidget {
                                             readonly property int downloadRevision: quranService ? quranService.downloadRevision : 0
                                             readonly property bool fullDownloaded: {
                                                 downloadRevision;
-                                                return root.activeTab === "reciter" && quranService ? quranService.isDownloaded(reciter.identifier) : false;
+                                                return root.activeTab === "reciter" && quranService ? quranService.isMushafDownloaded(reciter.identifier) : false;
                                             }
                                             readonly property bool surahDownloaded: {
                                                 downloadRevision;
                                                 return root.activeTab === "surah" && quranService ? quranService.isSurahDownloaded(quranService.reciterId, surah.number) : false;
                                             }
                                             readonly property bool isDownloading: root.activeTab === "surah" ? (quranService ? quranService.isSurahDownloading(quranService.reciterId, surah.number) : false) : (quranService ? quranService.isReciterDownloading(reciter.identifier) : false)
-                                            readonly property int downloadPercent: isDownloading && quranService && quranService.downloadTotal > 0 ? Math.min(100, Math.round(100 * quranService.downloadDone / quranService.downloadTotal)) : 0
 
                                             readonly property color rowTitle: selected ? Qt.lighter(root.accentC, 1.2) : root.fg
                                             readonly property color rowSubtitle: selected ? Util.alpha(root.accentC, 0.75) : root.mutedC
                                             readonly property color actionColor: surahDownloaded || fullDownloaded || isDownloading ? root.accentC : root.mutedC
 
-                                            width: listColumn.width
+                                            width: listView.width
                                             height: rowInner.implicitHeight + Style.space(16)
                                             radius: Style.space(8)
                                             color: selected ? Util.alpha(root.accentC, 0.16) : (hoveredCursor ? Util.alpha(root.fg, 0.07) : "transparent")
@@ -740,8 +748,8 @@ BarWidget {
                                                     }
                                                 }
 
-                                                // Download status icon: outline (muted) → spinner (accent)
-                                                // → check-circle (accent). Dedicated 24x24 hit area with its own
+                                                // Download status icon: outline (muted) → web-style spinner
+                                                // (accent) → check-circle (accent). Dedicated 24x24 hit area with its own
                                                 // MouseArea so the click downloads instead of falling through to
                                                 // the row (select/play).
                                                 Item {
@@ -772,31 +780,35 @@ BarWidget {
                                                     Item {
                                                         anchors.centerIn: parent
                                                         visible: isDownloading
+                                                        width: Style.space(18)
+                                                        height: Style.space(18)
 
-                                                        Text {
-                                                            anchors.centerIn: parent
-                                                            anchors.verticalCenterOffset: -5
-                                                            text: "⟳"
-                                                            color: root.accentC
-                                                            font.family: root.bar.fontFamily
-                                                            font.pixelSize: Style.font.bodySmall
-                                                            RotationAnimation on rotation {
-                                                                from: 0
-                                                                to: 360
-                                                                duration: 800
-                                                                loops: Animation.Infinite
-                                                                running: isDownloading
+                                                        // Eight dots with a staggered opacity wave. This is an
+                                                        // indeterminate spinner, rather than a glyph rotating in
+                                                        // place or a fabricated percentage.
+                                                        Repeater {
+                                                            model: 8
+
+                                                            Rectangle {
+                                                                required property int index
+                                                                width: Style.space(3)
+                                                                height: Style.space(5)
+                                                                radius: width / 2
+                                                                color: root.accentC
+                                                                x: (parent.width - width) / 2 + Math.sin(index * Math.PI / 4) * Style.space(5.5)
+                                                                y: (parent.height - height) / 2 - Math.cos(index * Math.PI / 4) * Style.space(5.5)
+                                                                rotation: index * 45
+
+                                                                SequentialAnimation on opacity {
+                                                                    loops: Animation.Infinite
+                                                                    running: isDownloading
+                                                                    PauseAnimation { duration: index * 90 }
+                                                                    NumberAnimation { to: 1.0; duration: 140 }
+                                                                    PauseAnimation { duration: 450 }
+                                                                    NumberAnimation { to: 0.25; duration: 140 }
+                                                                    PauseAnimation { duration: (7 - index) * 90 }
+                                                                }
                                                             }
-                                                        }
-
-                                                        Text {
-                                                            anchors.centerIn: parent
-                                                            anchors.verticalCenterOffset: 6
-                                                            text: downloadPercent + "%"
-                                                            color: root.accentC
-                                                            font.family: root.bar.fontFamily
-                                                            font.pixelSize: Style.font.caption
-                                                            font.bold: true
                                                         }
                                                     }
 
@@ -813,7 +825,9 @@ BarWidget {
                                                             if (root.activeTab === "surah")
                                                                 Quickshell.execDetached(["omarchy-shell", "quran", "download", quranService.reciterId, String(surah.number)]);
                                                             else
-                                                                Quickshell.execDetached(["omarchy-shell", "quran", "download", reciter.identifier]);
+                                                                // IPC requires the surah argument; 0 means the full
+                                                                // reciter set and is handled as a mushaf download.
+                                                                Quickshell.execDetached(["omarchy-shell", "quran", "download", reciter.identifier, "0"]);
                                                         }
                                                     }
 
@@ -825,20 +839,19 @@ BarWidget {
                                                 }
                                             }
                                         }
-                                    }
-
-                                    // empty state
-                                    Text {
-                                        width: listColumn.width
-                                        visible: root.currentFiltered().length === 0
-                                        text: root.trArgs("noResults", [root.activeTab === "surah" ? root.surahQuery : root.reciterQuery])
-                                        color: root.mutedC
-                                        font.family: root.bar.fontFamily
-                                        font.pixelSize: Style.font.bodySmall
-                                        wrapMode: Text.WordWrap
-                                        horizontalAlignment: Text.AlignHCenter
-                                    }
                                 }
+
+                            // Empty state is outside the virtualized list so it
+                            // does not become a delegate or affect scrolling.
+                            Text {
+                                width: parent.width
+                                visible: root.currentFiltered().length === 0
+                                text: root.trArgs("noResults", [root.activeTab === "surah" ? root.surahQuery : root.reciterQuery])
+                                color: root.mutedC
+                                font.family: root.bar.fontFamily
+                                font.pixelSize: Style.font.bodySmall
+                                wrapMode: Text.WordWrap
+                                horizontalAlignment: Text.AlignHCenter
                             }
                         }
                     }

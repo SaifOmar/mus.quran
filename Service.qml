@@ -12,7 +12,14 @@ Item {
 
   readonly property string dataDir: Quickshell.env("HOME") + "/.local/state/omarchy/quran"
   readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/settings/quran.json"
-  readonly property string mpvSocketPath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/mus-quran-mpv.sock"
+  // mpv IPC socket lives in a private 0700 runtime dir (created on startup),
+  // never /tmp. Falls back under the cache root when XDG_RUNTIME_DIR is unset.
+  readonly property string mpvRuntimeDir: (function() {
+    var rt = Quickshell.env("XDG_RUNTIME_DIR")
+    if (rt && rt !== "") return rt + "/mus-quran"
+    return Quickshell.env("HOME") + "/.cache/omarchy/quran/run"
+  })()
+  readonly property string mpvSocketPath: root.mpvRuntimeDir + "/mpv.sock"
 
   // --- playback state (read by the bar widget + IPC) ---
   readonly property var player: playerFacade
@@ -31,6 +38,10 @@ Item {
 
   // --- mpv engine state (mirrored from observed properties) ---
   property string currentSource: ""       // source the user asked to play
+  property string playbackSourceKind: ""  // download | cache | stream
+  property var playbackSourceTarget: null // { id, n } for local validation failures
+  property var localValidationQueue: []
+  property var localValidationPlaybackTarget: null
   property bool mpvPaused: true           // observed `pause`
   property bool mpvEof: false             // true after end-file reason "eof"
   property double mpvPositionMs: 0        // observed `time-pos` in ms
@@ -52,8 +63,9 @@ Item {
   readonly property var surahs: SurahData.SURAHS
   property var reciters: []
   property string language: Model.DEFAULT_LANGUAGE
-  property var reciterStatus: ({}) // id -> "downloaded" | "declined" | "failed"
+  property var reciterStatus: ({}) // id -> prompt/failure history; not completion truth
   property var downloadedSurahs: ({}) // "reciterId:n" -> true
+  property var downloadedCounts: ({}) // reciterId -> count derived from downloadedSurahs
   property double catalogFetchedAt: 0
 
   // --- errors / status ---
@@ -70,6 +82,7 @@ Item {
   property var lastDownload: null       // { id, surah } for retry after failure
   readonly property string downloadScript: Quickshell.env("HOME") + "/.config/omarchy/plugins/mus.quran/download.sh"
   readonly property string cacheScript: Quickshell.env("HOME") + "/.config/omarchy/plugins/mus.quran/cache.sh"
+  readonly property string validateScript: Quickshell.env("HOME") + "/.config/omarchy/plugins/mus.quran/validate_media.sh"
   readonly property string cacheDir: Quickshell.env("HOME") + "/.cache/omarchy/quran"
 
   // --- streaming cache (invisible to the user; never changes download icons) ---
@@ -83,6 +96,33 @@ Item {
   property var cacheQueue: []          // serialized cache.sh ops (scan/size/promote/evict/clear)
   property var mushafPlan: null        // { id, allMissing } during full-reciter download
   property int downloadBaseline: 0     // promoted count framing the mushaf progress bar
+
+  // Per-reciter:surah fetch cooldown. After a failed fetch or a forced
+  // playback error on a cached file, re-fetches are refused for
+  // Model.COOLDOWN_MS so repeated IPC/retries cannot become a download storm.
+  property var fetchCooldowns: ({})    // "reciter:n" -> epoch ms when the window ends
+  property var foregroundFillTarget: null // { key, id, n, autoplay, positionMs } playing after fill
+  property var promoteSingleTarget: null  // { id, n } awaited by promote-single completion
+  property string mpvMprisScript: ""  // resolved mpv-mpris plugin path ("" = not found)
+
+  function _inCooldown(id, n) {
+    return Model.cooldownActive(root.fetchCooldowns, id + ":" + n, Date.now())
+  }
+
+  function _markFetchAttempt(id, n) {
+    Model.markCooldown(root.fetchCooldowns, id + ":" + n, Date.now())
+  }
+
+  function _clearCooldown(id, n) {
+    Model.clearCooldown(root.fetchCooldowns, id + ":" + n)
+  }
+
+  // Cap any string arriving over IPC before it is parsed or stored, so a
+  // hostile caller can't force unbounded memory/state growth.
+  function _capString(s, max) {
+    s = String(s || "")
+    return s.length > max ? s.substring(0, max) : s
+  }
 
   // current surah/reciter convenience lookups
   readonly property var currentSurah: currentSurahFor(surahNumber)
@@ -130,19 +170,61 @@ Item {
     return Model.reciterDisplayLabel(currentReciter, root.language)
   }
 
+  function downloadedCount(id) {
+    return root.downloadedCounts[id] || 0
+  }
+
+  function rebuildDownloadedCounts() {
+    var counts = {}
+    for (var key in root.downloadedSurahs) {
+      if (root.downloadedSurahs[key] !== true) continue
+      var sep = key.lastIndexOf(":")
+      if (sep <= 0) continue
+      var id = key.substring(0, sep)
+      counts[id] = (counts[id] || 0) + 1
+    }
+    root.downloadedCounts = counts
+  }
+
+  // Completion is derived from the per-surah map. reciterStatus is persisted
+  // history and may be stale if a file is removed or a prior batch was partial.
+  function isMushafDownloaded(id) {
+    return root.downloadedCount(id) === 114
+  }
+
+  // Compatibility alias for callers that used the old coarse API.
   function isDownloaded(id) {
-    return root.reciterStatus[id] === "downloaded"
+    return root.isMushafDownloaded(id)
   }
 
   function isSurahDownloaded(id, n) {
-    if (root.isDownloaded(id)) return true
     return root.downloadedSurahs[id + ":" + n] === true
   }
 
   function markSurahDownloaded(id, n) {
+    var key = id + ":" + n
     var next = Object.assign({}, root.downloadedSurahs)
-    next[id + ":" + n] = true
+    var wasDownloaded = next[key] === true
+    next[key] = true
     root.downloadedSurahs = next
+    if (!wasDownloaded) {
+      var counts = Object.assign({}, root.downloadedCounts)
+      counts[id] = (counts[id] || 0) + 1
+      root.downloadedCounts = counts
+    }
+    root.downloadRevision++
+    root.saveState()
+  }
+
+  function invalidateSurahDownload(id, n) {
+    var key = id + ":" + n
+    if (root.downloadedSurahs[key] !== true) return
+    var next = Object.assign({}, root.downloadedSurahs)
+    delete next[key]
+    root.downloadedSurahs = next
+    var counts = Object.assign({}, root.downloadedCounts)
+    counts[id] = Math.max(0, (counts[id] || 0) - 1)
+    root.downloadedCounts = counts
     root.downloadRevision++
     root.saveState()
   }
@@ -167,7 +249,7 @@ Item {
   // remaining surahs can be fetched in one click. A decline with zero
   // downloads is respected.
   function shouldPrompt(id) {
-    return !root.isDownloaded(id) && root.reciterStatus[id] === undefined
+    return !root.isMushafDownloaded(id) && root.reciterStatus[id] === undefined
   }
 
   function hasAnyDownloaded(id) {
@@ -263,6 +345,24 @@ Item {
       // A failed load (404 / dead link) must not read as "playing": pin pause
       // so isPlaying goes false and the play button stops showing pause.
       root.mpvPaused = true
+      if (root.playbackSourceKind === "download" && root.playbackSourceTarget) {
+        root.invalidateSurahDownload(root.playbackSourceTarget.id, root.playbackSourceTarget.n)
+      } else if (root.playbackSourceKind === "cache" && root.playbackSourceTarget) {
+        // A corrupt cached file: drop it from the cache maps and delete it so
+        // the next fill re-downloads clean instead of looping the same dead
+        // file forever. The cooldown keeps a forced-error loop from becoming
+        // a download storm — the next retry within 10 s is refused, and any
+        // later retry re-fetches from the CDN.
+        var cid = root.playbackSourceTarget.id
+        var cn = root.playbackSourceTarget.n
+        var ckey = cid + ":" + cn
+        delete root.cacheFiles[ckey]
+        delete root.cacheLastPlayed[ckey]
+        root._markFetchAttempt(cid, cn)
+        root.saveState()
+        root.cacheOp({ mode: "remove-file",
+          command: ["bash", root.cacheScript, "remove", root.cacheDir, cid, String(cn)] })
+      }
       root.errorMessage = Model.tr(root.language, "playbackFailed")
     }
     // "stop" / "quit" / "redirect" / "unknown" (e.g. switching surahs) ignored.
@@ -284,20 +384,59 @@ Item {
     surahDebounce.restart()
   }
 
-  // Playback source resolution (mpv backend):
-  //   1. explicitly downloaded (state dir) -> local file
-  //   2. cached (cache dir, complete)      -> local file + touch LRU
-  //   3. else                              -> stream CDN + background cache fill
-  function _sourceFor(id, n) {
+  function localAudioPath(id, n) {
+    return root.dataDir + "/" + id + "/" + n + ".mp3"
+  }
+
+  // Playback source resolution (mpv backend), after permanent-file validation:
+  //   1. explicitly downloaded (validated state dir) -> local file
+  //   2. cached (cache dir, complete)                  -> local file
+  //   3. else                                          -> foreground cache fill,
+  //      then play the local file. mpv never receives a remote URL.
+  function _playFallback(id, n, autoplay, positionMs) {
+    var shouldPlay = autoplay !== false
+    var resumeMs = positionMs || 0
     var key = id + ":" + n
-    if (root.isSurahDownloaded(id, n)) return Model.localAudioUrl(root.dataDir, id, n)
     if (root.cacheFiles[key]) {
       root.touchCache(id, n)
-      return Model.localAudioUrl(root.cacheDir, id, n)
+      root.playbackSourceKind = "cache"
+      root.playbackSourceTarget = { id: id, n: n }
+      root._mpvLoad(Model.localAudioUrl(root.cacheDir, id, n), shouldPlay, resumeMs)
+      root._setMprisMetadata(id, n)
+      root.resumePending = false
+      root.saveState()
+      return
     }
-    root.fillCache(id, n)
-    var reciter = root.reciterFor(id)
-    return Model.audioUrl(id, n, reciter)
+    // Not cached: fetch into the cache (foreground), then play the local
+    // file. A cooldown-blocked or budget-blocked fill fails playback rather
+    // than streaming an unvalidated URL into mpv.
+    root.playbackSourceKind = "cache"
+    root.playbackSourceTarget = { id: id, n: n }
+    if (!root.fillCache(id, n)) {
+      root.errorMessage = Model.tr(root.language, "playbackFailed")
+      return
+    }
+    root.foregroundFillTarget = { key: key, id: id, n: n, autoplay: shouldPlay, positionMs: resumeMs }
+    foregroundFillTimer.restart()
+  }
+
+  // Called from fillProc.onExited when the awaited foreground fill finishes.
+  function _onForegroundFillFinished(key, exitCode) {
+    var t = root.foregroundFillTarget
+    if (!t || t.key !== key) return
+    root.foregroundFillTarget = null
+    foregroundFillTimer.stop()
+    if (exitCode === 0 && root.cacheFiles[key]) {
+      root.touchCache(t.id, t.n)
+      root.playbackSourceKind = "cache"
+      root.playbackSourceTarget = { id: t.id, n: t.n }
+      root._mpvLoad(Model.localAudioUrl(root.cacheDir, t.id, t.n), t.autoplay, t.positionMs)
+      root._setMprisMetadata(t.id, t.n)
+      root.resumePending = false
+      root.saveState()
+    } else {
+      root.errorMessage = Model.tr(root.language, "playbackFailed")
+    }
   }
 
   function _playNow(id, n) {
@@ -305,17 +444,78 @@ Item {
       root.errorMessage = Model.tr(root.language, "invalidInput")
       return
     }
-    var source = root._sourceFor(id, n)
-    if (!source) {
-      root.errorMessage = Model.tr(root.language, "noAudio")
+    if (root.isSurahDownloaded(id, n)) {
+      root.requestLocalValidation(id, n, true, 0)
       return
     }
-    root.reciterId = id
-    root.surahNumber = n
-    root._mpvLoad(source, true, 0)
-    root._setMprisMetadata(id, n)
-    root.resumePending = false
-    root.saveState()
+    root._playFallback(id, n, true, 0)
+  }
+
+  function requestLocalValidation(id, n, autoplay, positionMs) {
+    var target = { id: id, n: n, autoplay: autoplay !== false, positionMs: positionMs || 0 }
+    if (localValidationProc.running) {
+      localValidationPlaybackTarget = target
+      return
+    }
+    localValidationProc.mode = "playback"
+    localValidationProc.target = target
+    // Deep media validation (size, MIME type, ffprobe) — fails closed when
+    // file(1) is missing. A non-zero exit means the local file is unusable.
+    localValidationProc.command = ["bash", root.validateScript, root.localAudioPath(id, n)]
+    localValidationProc.running = true
+  }
+
+  function queueDownloadedFileValidation() {
+    var queue = []
+    for (var key in root.downloadedSurahs) {
+      if (root.downloadedSurahs[key] !== true) continue
+      var sep = key.lastIndexOf(":")
+      if (sep <= 0) continue
+      queue.push({ id: key.substring(0, sep), n: parseInt(key.substring(sep + 1)) })
+    }
+    localValidationQueue = queue
+    pumpLocalValidation()
+  }
+
+  function pumpLocalValidation() {
+    if (localValidationProc.running) return
+    var target = null
+    var mode = ""
+    if (localValidationPlaybackTarget) {
+      target = localValidationPlaybackTarget
+      localValidationPlaybackTarget = null
+      mode = "playback"
+    } else if (localValidationQueue.length > 0) {
+      target = localValidationQueue.shift()
+      mode = "startup"
+    } else {
+      return
+    }
+    localValidationProc.mode = mode
+    localValidationProc.target = target
+    localValidationProc.command = ["test", "-s", root.localAudioPath(target.id, target.n)]
+    localValidationProc.running = true
+  }
+
+  function onLocalValidationExited(exitCode) {
+    var target = localValidationProc.target
+    var mode = localValidationProc.mode
+    localValidationProc.target = null
+    localValidationProc.mode = ""
+    if (target && exitCode !== 0) {
+      root.invalidateSurahDownload(target.id, target.n)
+      if (mode === "playback") root._playFallback(target.id, target.n, target.autoplay, target.positionMs)
+    } else if (target && mode === "playback") {
+      root.playbackSourceKind = "download"
+      root.playbackSourceTarget = target
+      root.reciterId = target.id
+      root.surahNumber = target.n
+      root._mpvLoad(Model.localAudioUrl(root.dataDir, target.id, target.n), target.autoplay, target.positionMs)
+      root._setMprisMetadata(target.id, target.n)
+      root.resumePending = false
+      root.saveState()
+    }
+    pumpLocalValidation()
   }
 
   // Set mpv's force-media-title and artist so mpv-mpris surfaces surah/reciter
@@ -332,7 +532,16 @@ Item {
   // Load a source into mpv. `loadfile` replaces whatever is playing, then the
   // pause property pins the desired start state; resume positions are applied
   // on `file-loaded` (mpv can't set time-pos before the file exists).
+  // SECURITY: mpv only ever receives local files. Anything that is not a
+  // file:// URL (a hostile catalog URL, a tampered state file, a stray IPC
+  // call) is refused here — currentSource/lastSource are therefore always
+  // local, and every replay path (playPause, seek, crash recovery) inherits
+  // this guard.
   function _mpvLoad(source, autoplay, positionMs) {
+    if (typeof source !== "string" || source.indexOf("file://") !== 0) {
+      root.errorMessage = Model.tr(root.language, "playbackFailed")
+      return
+    }
     root.currentSource = source
     root.lastSource = source
     root.mpvEof = false
@@ -457,10 +666,10 @@ Item {
     if (root.lastSource !== "") return
     if (!root.resumePending || root.resumePosition <= 0) return
     root.resumePending = false
-    var source = root._sourceFor(root.reciterId, root.surahNumber)
-    if (!source) return
-    root._mpvLoad(source, false, root.resumePosition)
-    root.saveState()
+    if (root.isSurahDownloaded(root.reciterId, root.surahNumber))
+      root.requestLocalValidation(root.reciterId, root.surahNumber, false, root.resumePosition)
+    else
+      root._playFallback(root.reciterId, root.surahNumber, false, root.resumePosition)
   }
 
   // --- mpv lifecycle --------------------------------------------------------
@@ -500,18 +709,13 @@ Item {
   }
 
   // After mpv restarts, re-issue the last known playback state so a crash is
-  // transparent apart from a brief playback gap.
+  // transparent apart from a brief playback gap. Routed through _mpvLoad so
+  // the file://-only guard applies here too.
   function _mpvRecoverLast() {
     if (root.lastSource === "") return
     var shouldPlay = root.isPlaying
-    root.mpvEof = false
-    root.endHandled = false
-    root.errorMessage = ""
-    root.mpvPaused = !shouldPlay
     var pos = root.mpvPositionMs > 0 ? root.mpvPositionMs : root.savedPosition
-    root.resumeLoadTarget = pos > 0 ? { positionMs: pos } : null
-    root._mpvCommand(["loadfile", root.lastSource])
-    root._mpvCommand(["set_property", "pause", !shouldPlay])
+    root._mpvLoad(root.lastSource, shouldPlay, pos)
   }
 
   function onMpvExited(exitCode) {
@@ -535,19 +739,28 @@ Item {
 
   function downloadSurah(id, n) {
     if (root.downloading || !Model.isValidSurahNumber(n)) return
-    if (root.isSurahDownloaded(id, n)) return
+    // Cooldown gate: a still-flagged corrupt file can be re-downloaded, but
+    // not more than once per reciter:surah inside the cooldown window — even
+    // via repeated IPC/retry calls.
+    if (root._inCooldown(id, n)) return
     var key = id + ":" + n
     // Already fully cached? Promote straight to a permanent download (no network).
     if (root.cacheFiles[key]) {
+      root.promoteSingleTarget = { id: id, n: n }
       root.promoteFromCache(id, n)
       return
     }
-    // A background cache fill for this exact surah is in flight: wait for it,
-    // then promote — avoids a duplicate network fetch.
+    // An explicit download takes priority over a background cache fill for
+    // the same surah. Waiting here made the button appear inert after Retry
+    // had started streaming the surah into the cache.
     if (root.cacheInFlight[key]) {
-      root.promotePending[key] = true
-      return
+      root.cancelCacheFill(key)
     }
+    root._markFetchAttempt(id, n)
+    root.startExplicitDownload(id, n)
+  }
+
+  function startExplicitDownload(id, n) {
     root.downloading = true
     root.downloadReciter = id
     root.lastDownload = { id: id, surah: n }
@@ -569,35 +782,50 @@ Item {
     downloadProc.running = true
   }
 
+  function cancelCacheFill(key) {
+    var remaining = []
+    for (var i = 0; i < root.fillQueue.length; i++) {
+      if (root.fillQueue[i] !== key) remaining.push(root.fillQueue[i])
+    }
+    root.fillQueue = remaining
+    delete root.cacheInFlight[key]
+    delete root.promotePending[key]
+    // If this key is currently being fetched, stopping the process prevents
+    // the background cache job from competing with the explicit action.
+    // Its onExited handler will clean up the target and pump the next item.
+    if (fillProc.target === key && fillProc.running)
+      fillProc.running = false
+  }
+
   function downloadMushaf(id) {
     if (root.downloading) return
-    if (root.isDownloaded(id)) return
-    var missing = []
-    for (var i = 1; i <= 114; i++) {
-      if (!root.isSurahDownloaded(id, i)) missing.push(i)
-    }
-    if (missing.length === 0) {
-      root.setReciterStatus(id, "downloaded")
-      return
-    }
+    // Always validate the complete reciter set. The persisted downloaded flag
+    // is only a cache of prior work and cannot prove that files still exist or
+    // are intact. download.sh's complete() check skips valid files and fetches
+    // only missing/corrupt ones.
+    var work = []
+    for (var i = 1; i <= 114; i++) work.push(i)
     var promoteList = []
-    for (var j = 0; j < missing.length; j++) {
-      if (root.cacheFiles[id + ":" + missing[j]]) promoteList.push(missing[j])
+    for (var j = 0; j < work.length; j++) {
+      if (root.cacheFiles[id + ":" + work[j]]) promoteList.push(work[j])
+    }
+    var remaining = []
+    for (var k = 0; k < work.length; k++) {
+      if (promoteList.indexOf(work[k]) === -1) remaining.push(work[k])
     }
     root.downloading = true
     root.downloadReciter = id
     root.lastDownload = { id: id, surah: 0 }
-    // Progress reflects overall mushaf completion: already-downloaded surahs
-    // plus cached ones being promoted form the baseline, then download.sh's
-    // per-surah progress adds on top (clamped to 114 in applyDownloadProgress).
-    var baseline = (114 - missing.length) + promoteList.length
+    // Progress reflects validation/download of all 114 surahs. Cached files
+    // promoted before the process starts form the initial baseline.
+    var baseline = promoteList.length
     root.downloadDone = baseline
     root.downloadTotal = 114
     root.downloadBaseline = baseline
     root.errorMessage = ""
-    root.mushafPlan = { id: id, allMissing: missing }
+    root.mushafPlan = { id: id, allMissing: work }
     if (promoteList.length > 0) root.promoteRun(id, promoteList)
-    else root.startMushafDownload(id, missing)
+    else root.startMushafDownload(id, remaining)
   }
 
   // Move complete cached files into the state dir (permanent). `list` is a
@@ -637,6 +865,9 @@ Item {
     var next = Object.assign({}, root.downloadedSurahs)
     for (var i = 1; i <= 114; i++) next[id + ":" + i] = true
     root.downloadedSurahs = next
+    var counts = Object.assign({}, root.downloadedCounts)
+    counts[id] = 114
+    root.downloadedCounts = counts
     root.downloadRevision++
     root.saveState()
   }
@@ -676,11 +907,22 @@ Item {
 
   function fillCache(id, n) {
     var key = id + ":" + n
-    if (root.cacheFiles[key]) return
-    if (root.cacheInFlight[key]) return
+    if (root.cacheFiles[key]) return true
+    if (root.cacheInFlight[key]) return true
+    // Cooldown gate: failed/forced-error surahs are not re-fetched inside the
+    // window, no matter how often playback or IPC retries them.
+    if (root._inCooldown(id, n)) return false
+    // Budget gate: never fill beyond the cache budget. Eviction stays
+    // post-hoc LRU; this check only prevents the cache from growing while an
+    // eviction is pending or the budget was lowered.
+    if (root.cacheSizeBytes + Model.MAX_SURAH_BYTES > root.cacheLimitMb * 1048576) {
+      root.runEviction()
+      return false
+    }
     root.cacheInFlight[key] = true
     root.fillQueue.push(key)
     root.pumpFillQueue()
+    return true
   }
 
   function pumpFillQueue() {
@@ -688,9 +930,22 @@ Item {
     if (root.fillQueue.length === 0) return
     var key = root.fillQueue.shift()
     var parts = root.splitKey(key)
+    // Re-validate at dequeue time: state may have changed since enqueue.
+    if (root.cacheFiles[key] || root._inCooldown(parts[0], parts[1])) {
+      delete root.cacheInFlight[key]
+      root.pumpFillQueue()
+      return
+    }
+    if (root.cacheSizeBytes + Model.MAX_SURAH_BYTES > root.cacheLimitMb * 1048576) {
+      delete root.cacheInFlight[key]
+      root.pumpFillQueue()
+      return
+    }
     var reciter = root.reciterFor(parts[0])
     fillProc.target = key
-    var cmd = ["bash", root.downloadScript, parts[0], parts[1], "--dest", root.cacheDir]
+    // download.sh enforces the same budget on its side (defense in depth).
+    var cmd = ["bash", root.downloadScript, parts[0], parts[1], "--dest", root.cacheDir,
+      "--budget-bytes", String(root.cacheLimitMb * 1048576)]
     if (reciter && reciter.server) {
       cmd.push("--server")
       cmd.push(reciter.server)
@@ -763,10 +1018,22 @@ Item {
     var lines = out.split("\n")
     var i, m, key, parts
     if (mode === "scan") {
+      // Rebuild the map from scratch rather than merging: purges ghost
+      // entries (including any pre-existing flat <cacheDir>/<n>.mp3 from
+      // older builds, which never match "<reciter>/<n>.mp3"). Entries are
+      // routed through the same whitelist loadState uses — don't blindly
+      // trust scan output even though cache.sh constrains it.
+      var rebuilt = {}
       for (i = 0; i < lines.length; i++) {
         m = lines[i].match(/^(\S+)\/(\d+)\.mp3$/)
-        if (m) root.cacheFiles[m[1] + ":" + m[2]] = true
+        if (!m) continue
+        var rid = m[1]
+        var rnum = parseInt(m[2], 10)
+        if (!Model.isSafeIdentifier(rid)) continue
+        if (!Model.isValidSurahNumber(rnum)) continue
+        rebuilt[rid + ":" + rnum] = true
       }
+      root.cacheFiles = rebuilt
     } else if (mode === "size") {
       root.cacheSizeBytes = parseInt(out) || 0
     } else if (mode === "promote" || mode === "promote-single") {
@@ -782,7 +1049,22 @@ Item {
         moved.push(m[2])
       }
       if (mode === "promote-single") {
-        root.downloading = false
+        if (moved.length === 0 && root.promoteSingleTarget) {
+          // The cached file is actually missing (or the move failed): fall
+          // back to a real download instead of silently no-op'ing.
+          var ps = root.promoteSingleTarget
+          root.promoteSingleTarget = null
+          if (!root._inCooldown(ps.id, ps.n)) {
+            root._markFetchAttempt(ps.id, ps.n)
+            root.startExplicitDownload(ps.id, ps.n)
+          } else {
+            root.downloading = false
+            root.errorMessage = Model.tr(root.language, "downloadFailed")
+          }
+        } else {
+          root.promoteSingleTarget = null
+          root.downloading = false
+        }
       } else if (root.mushafPlan) {
         var plan = root.mushafPlan
         root.mushafPlan = null
@@ -833,9 +1115,14 @@ Item {
     root.recitersLoading = true
     root.rawRecitersEng = ""
     root.rawRecitersAr = ""
-    recitersProc.command = ["curl", "-fsSL", "--max-time", "20", Model.API_RECITERS_ENG]
+    // Catalog fetches are bounded: https-only, no redirects, strict timeouts,
+    // and a hard 2 MB response cap so a hostile catalog can't exhaust memory.
+    var catalogFlags = ["curl", "-fsSL", "--proto", "=https", "--proto-redir", "=https",
+      "--max-redirs", "0", "--connect-timeout", "10", "--max-time", "20",
+      "--max-filesize", "2097152"]
+    recitersProc.command = catalogFlags.concat([Model.API_RECITERS_ENG])
     recitersProc.running = true
-    recitersArProc.command = ["curl", "-fsSL", "--max-time", "20", Model.API_RECITERS_AR]
+    recitersArProc.command = catalogFlags.concat([Model.API_RECITERS_AR])
     recitersArProc.running = true
   }
 
@@ -844,11 +1131,22 @@ Item {
     var dataAr = null
     try { dataEng = JSON.parse(jsonEng || "") } catch (e) { dataEng = null }
     try { dataAr = JSON.parse(jsonAr || "") } catch (e) { dataAr = null }
-    root.reciters = Model.parseReciters(dataEng, dataAr)
+    var parsed = Model.parseReciters(dataEng, dataAr)
+    if (parsed.length === 0) {
+      // Never replace a known-good catalog with an empty one; only surface
+      // the error when there is nothing to fall back on.
+      root.recitersLoading = false
+      if (root.reciters.length === 0) {
+        root.catalogError = true
+        root.errorMessage = Model.tr(root.language, "reciterLoadFailed")
+      }
+      return
+    }
+    root.reciters = parsed
     root.recitersLoading = false
     root.catalogError = false
     if (!root.currentReciter) root.reciterId = Model.DEFAULT_RECITER
-    if (root.reciters.length > 0) root.catalogFetchedAt = Date.now()
+    root.catalogFetchedAt = Date.now()
     root.saveState()
   }
 
@@ -899,15 +1197,18 @@ Item {
     if (Model.MODES.indexOf(data.playbackMode) !== -1) root.playbackMode = data.playbackMode
     else root.playbackMode = Model.MODE_SINGLE
 
-    if (typeof data.reciterId === "string" && data.reciterId !== "") root.reciterId = data.reciterId
+    if (typeof data.reciterId === "string" && Model.isSafeIdentifier(data.reciterId)) {
+      root.reciterId = data.reciterId
+    }
     if (typeof data.surahNumber === "number"
         && data.surahNumber >= 1 && data.surahNumber <= 114) root.surahNumber = data.surahNumber
 
     if (Array.isArray(data.reciters) && data.reciters.length > 0) {
       // Re-validate persisted catalog entries (a stale/tampered state file
-      // must not reintroduce an unsafe `server` or identifier).
+      // must not reintroduce an unsafe `server` or identifier). Count cap so
+      // a hostile state file can't blow up memory.
       var safeReciters = []
-      for (var ri = 0; ri < data.reciters.length; ri++) {
+      for (var ri = 0; ri < data.reciters.length && safeReciters.length < 1000; ri++) {
         if (Model.isSafeReciter(data.reciters[ri])) safeReciters.push(data.reciters[ri])
       }
       if (safeReciters.length > 0) {
@@ -915,9 +1216,45 @@ Item {
         if (!root.currentReciter) root.reciterId = Model.DEFAULT_RECITER
       }
     }
-    if (typeof data.catalogFetchedAt === "number") root.catalogFetchedAt = data.catalogFetchedAt
-    if (data.reciterStatus && typeof data.reciterStatus === "object") root.reciterStatus = data.reciterStatus
-    if (data.downloadedSurahs && typeof data.downloadedSurahs === "object") root.downloadedSurahs = data.downloadedSurahs
+    if (typeof data.catalogFetchedAt === "number" && isFinite(data.catalogFetchedAt) && data.catalogFetchedAt >= 0) {
+      root.catalogFetchedAt = data.catalogFetchedAt
+    }
+    if (data.reciterStatus && typeof data.reciterStatus === "object") {
+      // Keys must be valid identifiers, values from the known set; junk is
+      // dropped individually.
+      var statusClean = {}
+      for (var sk in data.reciterStatus) {
+        if (!Model.isSafeIdentifier(sk)) continue
+        var sv = data.reciterStatus[sk]
+        if (sv === "downloaded" || sv === "declined" || sv === "failed") statusClean[sk] = sv
+      }
+      root.reciterStatus = statusClean
+    }
+    if (data.downloadedSurahs && typeof data.downloadedSurahs === "object") {
+      // Keys must match <validIdentifier>:<1..114> with a canonical number,
+      // value === true; invalid keys are dropped individually (not a
+      // wholesale reject) and the map is capped.
+      var dlClean = {}
+      var dlCount = 0
+      for (var dk in data.downloadedSurahs) {
+        if (dlCount >= 5000) break
+        if (data.downloadedSurahs[dk] !== true) continue
+        var dsep = dk.lastIndexOf(":")
+        if (dsep <= 0) continue
+        var did = dk.substring(0, dsep)
+        var dnumStr = dk.substring(dsep + 1)
+        var dnum = parseInt(dnumStr, 10)
+        if (!Model.isSafeIdentifier(did)) continue
+        if (!Model.isValidSurahNumber(dnum)) continue
+        if (String(dnum) !== dnumStr) continue
+        dlClean[dk] = true
+        dlCount++
+      }
+      root.downloadedSurahs = dlClean
+      root.rebuildDownloadedCounts()
+      root.downloadRevision++
+      root.queueDownloadedFileValidation()
+    }
 
     // Cache budget is user-tunable via quran.json (sanitized to a sane range).
     if (typeof data.cacheLimitMb === "number" && data.cacheLimitMb >= 100 && data.cacheLimitMb <= 10000) {
@@ -926,13 +1263,30 @@ Item {
       root.cacheLimitMb = 500
     }
     if (data.cacheLastPlayed && typeof data.cacheLastPlayed === "object") {
-      root.cacheLastPlayed = data.cacheLastPlayed
+      // Same key whitelist as downloadedSurahs; values must be finite ms
+      // timestamps within safe-integer range.
+      var clpClean = {}
+      for (var ck in data.cacheLastPlayed) {
+        var csep = ck.lastIndexOf(":")
+        if (csep <= 0) continue
+        var cid = ck.substring(0, csep)
+        var cnumStr = ck.substring(csep + 1)
+        var cnum = parseInt(cnumStr, 10)
+        if (!Model.isSafeIdentifier(cid)) continue
+        if (!Model.isValidSurahNumber(cnum)) continue
+        if (String(cnum) !== cnumStr) continue
+        var cv = data.cacheLastPlayed[ck]
+        if (typeof cv !== "number" || !isFinite(cv) || cv < 0 || cv > Number.MAX_SAFE_INTEGER) continue
+        clpClean[ck] = cv
+      }
+      root.cacheLastPlayed = clpClean
     } else {
       root.cacheLastPlayed = {}
     }
 
     // Resume: restore last surah but stay paused; seek after the media loads.
-    if (typeof data.position === "number" && data.position > 0) {
+    if (typeof data.position === "number" && isFinite(data.position)
+        && data.position > 0 && data.position <= 24 * 60 * 60 * 1000) {
       root.resumePosition = data.position
       root.savedPosition = data.position
       root.resumePending = true
@@ -952,6 +1306,7 @@ Item {
     root.cacheOp({ mode: "scan", command: ["bash", root.cacheScript, "scan", root.cacheDir] })
     root.cacheOp({ mode: "size", command: ["bash", root.cacheScript, "size", root.cacheDir] })
     sockCleanProc.running = true
+    mprisFindProc.running = true
   }
 
   Component.onDestruction: {
@@ -967,16 +1322,56 @@ Item {
 
   // --- mpv backend ----------------------------------------------------------
   // A single long-lived mpv owns playback; MPRIS is provided by the mpv-mpris
-  // script mpv loads automatically (org.mpris.MediaPlayer2.mpv).
+  // plugin loaded explicitly (--script=...), never via config autoload —
+  // --no-config disables the default script-autoload dir, so relying on
+  // autoload would silently drop MPRIS. No network flags: mpv only ever
+  // receives local files (see _mpvLoad).
+
+  // Full mpv command line, built once the mpris plugin path is known.
+  function _mpvCommandLine() {
+    var cmd = ["mpv", "--idle", "--no-video", "--no-terminal",
+      "--no-config", "--no-input-default-bindings", "--no-osc",
+      "--demuxer-max-bytes=2M", "--demuxer-max-back-bytes=1M", "--demuxer-readahead-secs=15",
+      "--input-ipc-server=" + root.mpvSocketPath]
+    if (root.mpvMprisScript !== "") cmd.push("--script=" + root.mpvMprisScript)
+    return cmd
+  }
+
+  // Start mpv once both the socket-cleanup and the mpris probe finished.
+  function _maybeStartMpv() {
+    if (root.shuttingDown || mpvProc.running) return
+    if (sockCleanProc.running || mprisFindProc.running) return
+    mpvProc.command = root._mpvCommandLine()
+    mpvProc.running = true
+  }
+
+  Process {
+    id: localValidationProc
+    property var target: null
+    property string mode: ""
+    onExited: function(exitCode) { root.onLocalValidationExited(exitCode) }
+  }
 
   Process {
     id: mpvProc
-    command: ["mpv", "--idle", "--no-video", "--no-terminal",
-      "--demuxer-max-bytes=2M", "--demuxer-max-back-bytes=1M", "--demuxer-readahead-secs=15",
-      "--input-ipc-server=" + root.mpvSocketPath]
+    command: ["mpv", "--idle"]
     running: false
     onStarted: root._mpvConnect()
     onExited: function(exitCode) { root.onMpvExited(exitCode) }
+  }
+
+  // Locate the mpv-mpris C plugin in the standard install locations. When it
+  // is missing, playback continues without system media control.
+  Process {
+    id: mprisFindProc
+    command: ["bash", "-c",
+      'for p in /usr/lib/mpv/mpv-mpris/mpv_mpris.so /usr/lib64/mpv/mpv-mpris/mpv_mpris.so /usr/share/mpv/scripts/mpv-mpris/mpv_mpris.so "$HOME/.config/mpv/scripts/mpv-mpris/mpv_mpris.so" "$HOME/.local/lib/mpv/mpv-mpris/mpv_mpris.so"; do [ -f "$p" ] && { echo "$p"; exit 0; }; done; exit 1']
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.mpvMprisScript = text.trim()
+    }
+    running: false
+    onExited: root._maybeStartMpv()
   }
 
   Timer {
@@ -984,7 +1379,7 @@ Item {
     interval: 1000
     onTriggered: {
       if (!root.shuttingDown && !mpvProc.running && root.mpvRestartCount < 5) {
-        mpvProc.running = true
+        root._maybeStartMpv()
       }
     }
   }
@@ -1025,6 +1420,19 @@ Item {
     onTriggered: {
       if (root.pendingTarget) root._playNow(root.pendingTarget.id, root.pendingTarget.n)
       root.pendingTarget = null
+    }
+  }
+
+  // Bound on a foreground cache fill: if the fill hasn't completed within 120
+  // seconds the playback attempt fails and the surah is left for a (cooldown-
+  // gated) background retry.
+  Timer {
+    id: foregroundFillTimer
+    interval: 120000
+    repeat: false
+    onTriggered: {
+      root.foregroundFillTarget = null
+      root.errorMessage = Model.tr(root.language, "playbackFailed")
     }
   }
 
@@ -1095,6 +1503,7 @@ Item {
       root.downloading = false
       if (exitCode === 0) {
         if (n > 0) {
+          root._clearCooldown(id, n)
           root.markSurahDownloaded(id, n)
         } else {
           root.finishMushafDownload(id)
@@ -1133,6 +1542,7 @@ Item {
       if (exitCode === 0) {
         root.cacheFiles[key] = true
         root.touchCache(parts[0], parts[1])
+        root._clearCooldown(parts[0], parts[1])
         root.saveState()
         root.runEviction()
         root.refreshCacheSize()
@@ -1141,6 +1551,7 @@ Item {
         delete root.promotePending[key]
         if (exitCode === 0) root.promoteFromCache(parts[0], parts[1])
       }
+      root._onForegroundFillFinished(key, exitCode)
       root.pumpFillQueue()
     }
   }
@@ -1163,16 +1574,19 @@ Item {
     }
   }
 
-  // Remove any stale IPC socket before (re)starting mpv. Unlinking only drops
-  // the directory entry: a live orphaned mpv keeps its bound inode (unreachable)
-  // while a fresh mpv can bind the path again — safe for our private socket.
+  // Prepare the mpv runtime dir (0700) and remove any stale IPC socket before
+// (re)starting mpv. The socket is only unlinked when it exists, is a socket,
+// and is owned by the current euid — a foreign file (or a symlink) at that
+// path is never deleted. Unlinking only drops the directory entry: a live
+// orphaned mpv keeps its bound inode (unreachable) while a fresh mpv can bind
+// the path again — safe for our private socket.
   Process {
     id: sockCleanProc
-    command: ["rm", "-f", root.mpvSocketPath]
+    command: ["bash", "-c",
+      'd="$1"; p="$2"; mkdir -p -m 700 -- "$d" || exit 1; [ -S "$p" ] || exit 0; [ "$(stat -c %u "$p")" = "$(id -u)" ] || exit 0; rm -f -- "$p"',
+      "sockclean", root.mpvRuntimeDir, root.mpvSocketPath]
     running: false
-    onExited: {
-      if (!root.shuttingDown && !mpvProc.running) mpvProc.running = true
-    }
+    onExited: root._maybeStartMpv()
   }
 
   IpcHandler {
@@ -1213,14 +1627,18 @@ Item {
     }
 
     function seek(ms: string): string {
-      root.seek(parseInt(ms) || 0)
+      var v = Model.parseSeekArg(root._capString(ms, 32))
+      if (v === null) return "error: invalid seek position"
+      root.seek(v)
       return "ok"
     }
 
     function playSurah(reciterId: string, surahNumber: string): string {
-      var id = String(reciterId || root.reciterId)
-      var n = parseInt(surahNumber) || 0
-      if (!Model.isValidSurahNumber(n)) return "error: invalid surah"
+      var id = root._capString(reciterId, 128)
+      if (!id) id = root.reciterId
+      var n = Model.parseSurahArg(root._capString(surahNumber, 32))
+      if (n === null) return "error: invalid surah"
+      if (!Model.isSafeReciterArg(id)) return "error: invalid reciter"
       if (root.reciters.length > 0 && !Model.reciterExists(root.reciters, id)) return "error: unknown reciter"
       root.playSurah(id, n)
       return "ok"
@@ -1240,12 +1658,24 @@ Item {
     }
 
     function download(reciterId: string, n: string): string {
-      var id = String(reciterId || "")
-      if (!id || !Model.reciterExists(root.reciters, id)) return "error: unknown reciter"
-      var surah = n ? (parseInt(n) || 0) : 0
-      if (surah !== 0 && !Model.isValidSurahNumber(surah)) return "error: invalid surah"
-      if (surah === 0) root.downloadMushaf(id)
-      else root.downloadSurah(id, surah)
+      var id = root._capString(reciterId, 128)
+      if (!Model.isSafeReciterArg(id)) return "error: invalid reciter"
+      if (!Model.reciterExists(root.reciters, id)) return "error: unknown reciter"
+      var raw = root._capString(n, 32)
+      var surah = 0
+      if (raw !== "") {
+        surah = Model.parseSurahArg(raw)
+        if (surah === null) return "error: invalid surah"
+      }
+      if (surah === 0) {
+        root.downloadMushaf(id)
+      } else {
+        // Cooldown gate alongside the existing refuse-while-downloading guard:
+        // a caller cannot force more than one real fetch per reciter:surah
+        // inside the window.
+        if (root.downloading || root._inCooldown(id, surah)) return "error: retry in a moment"
+        root.downloadSurah(id, surah)
+      }
       return "ok"
     }
 
