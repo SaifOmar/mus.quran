@@ -899,29 +899,64 @@ Item {
     function downloadMushaf(id) {
         if (root.downloading)
             return;
-        // Always validate the complete reciter set. The persisted downloaded flag
-        // is only a cache of prior work and cannot prove that files still exist or
-        // are intact. quranctl's complete() check skips valid files and fetches
-        // only missing/corrupt ones.
+
+        // Only fetch surahs not already present offline. If your download flow
+        // still wants quranctl to re-validate/repair files that exist but are
+        // corrupt, this needs a different check than isSurahDownloaded() — see
+        // note below.
         var work = [];
-        for (var i = 1; i <= 114; i++)
-            work.push(i);
+        for (var i = 1; i <= 114; i++) {
+            if (!root.isSurahDownloaded(id, i))
+                work.push(i);
+        }
+
+        if (work.length === 0) {
+            // Already fully downloaded — nothing to do.
+            return;
+        }
+
         root.downloading = true;
         root.downloadReciter = id;
         root.lastDownload = {
             id: id,
             surah: 0
         };
-        // Mark the in-flight target up front so playback can preempt this mushaf
-        // before the process has actually started.
+
         downloadProc.targetReciter = id;
         downloadProc.targetSurah = 0;
-        // Progress reflects validation/download of all 114 surahs.
+
+        // Progress now reflects only the surahs actually being fetched.
         root.downloadDone = 0;
-        root.downloadTotal = 114;
+        root.downloadTotal = work.length;
         root.errorMessage = "";
         root.startMushafDownload(id, work);
     }
+    // function downloadMushaf(id) {
+    //     if (root.downloading)
+    //         return;
+    //     // Always validate the complete reciter set. The persisted downloaded flag
+    //     // is only a cache of prior work and cannot prove that files still exist or
+    //     // are intact. quranctl's complete() check skips valid files and fetches
+    //     // only missing/corrupt ones.
+    //     var work = [];
+    //     for (var i = 1; i <= 114; i++)
+    //         work.push(i);
+    //     root.downloading = true;
+    //     root.downloadReciter = id;
+    //     root.lastDownload = {
+    //         id: id,
+    //         surah: 0
+    //     };
+    //     // Mark the in-flight target up front so playback can preempt this mushaf
+    //     // before the process has actually started.
+    //     downloadProc.targetReciter = id;
+    //     downloadProc.targetSurah = 0;
+    //     // Progress reflects validation/download of all 114 surahs.
+    //     root.downloadDone = 0;
+    //     root.downloadTotal = 114;
+    //     root.errorMessage = "";
+    //     root.startMushafDownload(id, work);
+    // }
 
     function startMushafDownload(id, list) {
         if (!root.quranctlBinary) {
@@ -1918,7 +1953,7 @@ Item {
                 id = root.reciterId;
             var n = Model.parseSurahArg(root._capString(surahNumber, 32));
             if (n === null)
-                return "error: invalid surah";
+                return "error: invalid surah to play";
             if (!Model.isSafeReciterArg(id))
                 return "error: invalid reciter";
             if (root.reciters.length > 0 && !Model.reciterExists(root.reciters, id))
@@ -1948,7 +1983,7 @@ Item {
                 return "error: unknown reciter";
             var raw = root._capString(n, 32);
             var surah = 0;
-            if (raw !== "") {
+            if (raw !== "" && raw !== "0") {
                 surah = Model.parseSurahArg(raw);
                 if (surah === null)
                     return "error: invalid surah";
@@ -1956,15 +1991,37 @@ Item {
             if (surah === 0) {
                 root.downloadMushaf(id);
             } else {
-                // Cooldown gate alongside the existing refuse-while-downloading guard:
-                // a caller cannot force more than one real fetch per reciter:surah
-                // inside the window.
                 if (root.downloading || root._inCooldown(id, surah))
                     return "error: retry in a moment";
                 root.downloadSurah(id, surah);
             }
             return "ok";
         }
+        // function download(reciterId: string, n: string): string {
+        //     var id = root._capString(reciterId, 128);
+        //     if (!Model.isSafeReciterArg(id))
+        //         return "error: invalid reciter";
+        //     if (!Model.reciterExists(root.reciters, id))
+        //         return "error: unknown reciter";
+        //     var raw = root._capString(n, 32);
+        //     var surah = 0;
+        //     if (raw !== "") {
+        //         surah = Model.parseSurahArg(raw);
+        //         if (surah === null)
+        //             return "error: invalid surah";
+        //     }
+        //     if (surah === 0) {
+        //         root.downloadMushaf(id);
+        //     } else {
+        //         // Cooldown gate alongside the existing refuse-while-downloading guard:
+        //         // a caller cannot force more than one real fetch per reciter:surah
+        //         // inside the window.
+        //         if (root.downloading || root._inCooldown(id, surah))
+        //             return "error: retry in a moment";
+        //         root.downloadSurah(id, surah);
+        //     }
+        //     return "ok";
+        // }
 
         function ping(): string {
             return "ok";
