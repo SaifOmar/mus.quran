@@ -1,4 +1,5 @@
 /deprecated
 cleanup.sh
 mpris.py
-
+bin/
+dist/

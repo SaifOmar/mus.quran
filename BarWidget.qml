@@ -9,7 +9,25 @@ BarWidget {
     id: root
     moduleName: "mus.quran"
 
-    readonly property var quranService: bar && bar.shell ? bar.shell.firstPartyServiceFor("mus.quran") : null
+    property var quranService: bar && bar.shell ? bar.shell.firstPartyServiceFor("mus.quran") : null
+
+    // The service registers after this widget may instantiate (plugin load
+    // order). firstPartyServiceFor is a plain object lookup with no change
+    // signal, so keep polling until it lands; the binding also catches later
+    // updates once the service is present.
+    Timer {
+        interval: 200
+        repeat: true
+        running: !root.quranService
+        onTriggered: {
+            if (bar && bar.shell) {
+                var svc = bar.shell.firstPartyServiceFor("mus.quran");
+                if (svc)
+                    root.quranService = svc;
+            }
+        }
+    }
+
     // readonly property string iconGlyph: ""
     readonly property string iconGlyph: ""
 
@@ -75,8 +93,14 @@ BarWidget {
     }
 
     onPopupOpenChanged: {
-        if (root.popupOpen && quranService)
-            quranService.refreshCacheSize();
+        if (root.popupOpen) {
+            // Reset any stale search filter so the reciter/surah lists always
+            // show on a fresh open.
+            root.reciterQuery = "";
+            root.surahQuery = "";
+            if (quranService)
+                quranService.refreshCacheSize();
+        }
     }
 
     function playSurah(n) {
@@ -946,7 +970,7 @@ BarWidget {
                         anchors.right: parent.right
                         anchors.rightMargin: Style.space(12)
                         anchors.verticalCenter: parent.verticalCenter
-                        text: quranService ? root.trArgs("cacheSize", [Model.formatSize(quranService.cacheSizeBytes)]) : ""
+                        text: quranService ? root.trArgs("cacheSize", [Model.formatSize(quranService.proxySizeBytes)]) : ""
                         color: root.mutedC
                         font.family: root.bar.fontFamily
                         font.pixelSize: Style.font.caption

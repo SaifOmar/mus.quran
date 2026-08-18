@@ -1,0 +1,54 @@
+{
+  "version": 2,
+  "language": "en",
+  "reciterId": "ar.alafasy",
+  "surahNumber": 2,
+  "playbackMode": "continue",
+  "position": 305003,
+  "wasPlaying": false,
+  "cacheLimitMb": 500,
+  "cacheLastPlayed": { "mp3quran_51:6": 1786929944610 },
+  "reciters": [
+    {
+      "identifier": "mp3quran_49",
+      "id": "49",
+      "name": "عبدالبارئ الثبيتي",
+      "englishName": "Abdelbari Al-Toubayti",
+      "server": "https://server6.mp3quran.net/thubti/"
+    },
+    {
+      "identifier": "ar.alafasy",
+      "name": "مشاري العفاسي",
+      "englishName": "Mishary Alafasy",
+      "audioLevels": ["surah"]
+    },
+    {
+      "identifier": "mp3quran_51",
+      "id": "51",
+      "name": "عبدالباسط عبدالصمد",
+      "englishName": "Abdulbasit Abdussamad",
+      "server": "https://server12.mp3quran.net/basit/Rewayat-Hafs-A-n-Assem/"
+    },
+    {
+      "identifier": "hostile",
+      "id": "1",
+      "name": "Evil",
+      "englishName": "Evil",
+      "server": "http://evil.com/"
+    },
+    {
+      "identifier": "../x",
+      "id": "2",
+      "name": "Traversal",
+      "englishName": "Traversal",
+      "server": "https://server8.mp3quran.net/x/"
+    },
+    {
+      "identifier": "toolong",
+      "id": "3",
+      "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "englishName": "y",
+      "server": "https://server8.mp3quran.net/y/"
+    }
+  ]
+}
