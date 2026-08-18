@@ -25,7 +25,7 @@ var API_RECITERS_AR = "https://mp3quran.net/api/v3/reciters?language=ar"
 
 var STATE_VERSION = 2
 var CATALOG_TTL_MS = 24 * 60 * 60 * 1000
-// Per-surah cap (~300 MB), shared with download.sh.
+// Per-surah cap (~300 MB), shared with the quranctl downloader.
 var MAX_SURAH_BYTES = 314572800
 
 // --- playback modes ---
@@ -59,7 +59,7 @@ var STRINGS = {
     verses: "%1 verses", seekHint: "Click to seek",
     invalidInput: "Invalid reciter or surah",
     browse: "Browse", downloadingSurah: "Downloading surah %1",
-    clearCache: "Clear cache", cacheSize: "Cache: %1", downloadFailed: "Download failed",
+    clearCache: "Clear cache", cacheSize: "Cache: %1", downloadFailed: "Download failed", cacheClearFailed: "Cache unavailable", setupRequired: "Audio engine missing — run install.sh in the plugin folder",
     mpvMissing: "Playback unavailable — is mpv installed?",
     settings: "Settings", storage: "Storage & Cache", clear: "Clear",
     loadingReciters: "Loading reciters…",
@@ -85,7 +85,7 @@ var STRINGS = {
     verses: "%1 آية", seekHint: "انقر للانتقال",
     invalidInput: "قارئ أو سورة غير صالحة",
     browse: "تصفح", downloadingSurah: "جارٍ تحميل السورة %1",
-    clearCache: "مسح التخزين المؤقت", cacheSize: "التخزين المؤقت: %1", downloadFailed: "فشل التنزيل",
+    clearCache: "مسح التخزين المؤقت", cacheSize: "التخزين المؤقت: %1", downloadFailed: "فشل التنزيل", cacheClearFailed: "ذاكرة التخزين المؤقت غير متاحة", setupRequired: "محرك الصوت مفقود — شغّل install.sh في مجلد الإضافة",
     mpvMissing: "التشغيل غير متاح — هل mpv مثبّت؟",
     settings: "الإعدادات", storage: "التخزين والذاكرة", clear: "مسح",
   },
@@ -110,7 +110,7 @@ var STRINGS = {
     verses: "%1 versets", seekHint: "Cliquer pour avancer",
     invalidInput: "Récitant ou sourate invalide",
     browse: "Parcourir", downloadingSurah: "Téléchargement de la sourate %1",
-    clearCache: "Vider le cache", cacheSize: "Cache : %1", downloadFailed: "Échec du téléchargement",
+    clearCache: "Vider le cache", cacheSize: "Cache : %1", downloadFailed: "Échec du téléchargement", cacheClearFailed: "Cache indisponible", setupRequired: "Moteur audio absent — lancez install.sh dans le dossier du plugin",
     mpvMissing: "Lecture indisponible — mpv est-il installé ?",
     settings: "Paramètres", storage: "Stockage et Cache", clear: "Vider",
   },
@@ -135,7 +135,7 @@ var STRINGS = {
     verses: "%1 versículos", seekHint: "Haz clic para buscar",
     invalidInput: "Recitador o sura no válidos",
     browse: "Explorar", downloadingSurah: "Descargando sura %1",
-    clearCache: "Vaciar caché", cacheSize: "Caché: %1", downloadFailed: "Error de descarga",
+    clearCache: "Vaciar caché", cacheSize: "Caché: %1", downloadFailed: "Error de descarga", cacheClearFailed: "Caché no disponible", setupRequired: "Motor de audio ausente — ejecuta install.sh en la carpeta del plugin",
     mpvMissing: "Reproducción no disponible — ¿está instalado mpv?",
     settings: "Ajustes", storage: "Almacenamiento y Caché", clear: "Vaciar",
   },
@@ -160,7 +160,7 @@ var STRINGS = {
     verses: "%1 ayet", seekHint: "Gitmek için tıklayın",
     invalidInput: "Geçersiz okuyucu veya sure",
     browse: "Gözat", downloadingSurah: "%1. sure indiriliyor",
-    clearCache: "Önbelleği temizle", cacheSize: "Önbellek: %1", downloadFailed: "İndirme başarısız",
+    clearCache: "Önbelleği temizle", cacheSize: "Önbellek: %1", downloadFailed: "İndirme başarısız", cacheClearFailed: "Önbellek kullanılamıyor", setupRequired: "Ses motoru eksik — eklenti klasöründe install.sh çalıştırın",
     mpvMissing: "Oynatma kullanılamıyor — mpv yüklü mü?",
     settings: "Ayarlar", storage: "Depolama ve Önbellek", clear: "Temizle",
   },
@@ -185,7 +185,7 @@ var STRINGS = {
     verses: "%1 ayat", seekHint: "Klik untuk berpindah",
     invalidInput: "Qari atau surah tidak valid",
     browse: "Jelajahi", downloadingSurah: "Mengunduh surah %1",
-    clearCache: "Bersihkan cache", cacheSize: "Cache: %1", downloadFailed: "Unduhan gagal",
+    clearCache: "Bersihkan cache", cacheSize: "Cache: %1", downloadFailed: "Unduhan gagal", cacheClearFailed: "Cache tidak tersedia", setupRequired: "Mesin audio tidak ada — jalankan install.sh di folder plugin",
     mpvMissing: "Pemutaran tidak tersedia — apakah mpv terpasang?",
     settings: "Pengaturan", storage: "Penyimpanan & Cache", clear: "Bersihkan",
   },
@@ -210,7 +210,7 @@ var STRINGS = {
     verses: "%1 آیات", seekHint: "جگہ کے لیے کلک کریں",
     invalidInput: "غیر درست قاری یا سورت",
     browse: "براؤز کریں", downloadingSurah: "سورت %1 ڈاؤن لوڈ ہو رہی ہے",
-    clearCache: "کیشے صاف کریں", cacheSize: "کیشے: %1", downloadFailed: "ڈاؤن لوڈ ناکام",
+    clearCache: "کیشے صاف کریں", cacheSize: "کیشے: %1", downloadFailed: "ڈاؤن لوڈ ناکام", cacheClearFailed: "کیشے دستیاب نہیں", setupRequired: "آڈیو انجن موجود نہیں — پلگ ان فولڈر میں install.sh چلائیں",
     mpvMissing: "پلے بیک دستیاب نہیں — کیا mpv نصب ہے؟",
     settings: "سیٹنگز", storage: "سٹوریج اور کیشے", clear: "صاف کریں",
   },
@@ -235,7 +235,7 @@ var STRINGS = {
     verses: "%1 আয়াত", seekHint: "যেতে ক্লিক করুন",
     invalidInput: "অবৈধ ক্বারী বা সূরা",
     browse: "ব্রাউজ করুন", downloadingSurah: "সূরা %1 ডাউনলোড হচ্ছে",
-    clearCache: "ক্যাশ মুছুন", cacheSize: "ক্যাশ: %1", downloadFailed: "ডাউনলোড ব্যর্থ",
+    clearCache: "ক্যাশ মুছুন", cacheSize: "ক্যাশ: %1", downloadFailed: "ডাউনলোড ব্যর্থ", cacheClearFailed: "ক্যাশ উপলব্ধ নেই", setupRequired: "অডিও ইঞ্জিন অনুপস্থিত — প্লাগইন ফোল্ডারে install.sh চালান",
     mpvMissing: "প্লেব্যাক পাওয়া যাচ্ছে না — mpv কি ইনস্টল আছে?",
     settings: "সেটিংস", storage: "স্টোরেজ ও ক্যাশ", clear: "মুছুন",
   },
@@ -260,7 +260,7 @@ var STRINGS = {
     verses: "%1 аятов", seekHint: "Нажмите для перемотки",
     invalidInput: "Неверный чтец или сура",
     browse: "Обзор", downloadingSurah: "Скачивание суры %1",
-    clearCache: "Очистить кэш", cacheSize: "Кэш: %1", downloadFailed: "Ошибка загрузки",
+    clearCache: "Очистить кэш", cacheSize: "Кэш: %1", downloadFailed: "Ошибка загрузки", cacheClearFailed: "Кэш недоступен", setupRequired: "Аудио-движок отсутствует — запустите install.sh в папке плагина",
     mpvMissing: "Воспроизведение недоступно — установлен ли mpv?",
     settings: "Настройки", storage: "Память и Кэш", clear: "Очистить",
   },
@@ -285,7 +285,7 @@ var STRINGS = {
     verses: "%1 节经文", seekHint: "点击跳转",
     invalidInput: "诵读者或章节无效",
     browse: "浏览", downloadingSurah: "正在下载章节 %1",
-    clearCache: "清除缓存", cacheSize: "缓存：%1", downloadFailed: "下载失败",
+    clearCache: "清除缓存", cacheSize: "缓存：%1", downloadFailed: "下载失败", cacheClearFailed: "缓存不可用", setupRequired: "缺少音频引擎 — 请在插件目录中运行 install.sh",
     mpvMissing: "播放不可用 — 是否已安装 mpv？",
     settings: "设置", storage: "存储与缓存", clear: "清除",
   }
@@ -688,7 +688,7 @@ function isSafeReciter(reciter) {
   return true
 }
 
-// --- IPC / CLI argument parsers (strict; used by QML IPC and download.sh
+// --- IPC / CLI argument parsers (strict; used by QML IPC and quranctl
 // companion logic). These never throw and never accept junk like "1junk".
 
 // isSafeReciterArg(id) — a reciter id usable as a path segment: alnum first,

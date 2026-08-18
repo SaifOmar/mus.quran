@@ -80,29 +80,52 @@ Item {
   property int downloadRevision: 0
   property string downloadReciter: ""   // reciter currently being downloaded
   property var lastDownload: null       // { id, surah } for retry after failure
-  readonly property string downloadScript: Quickshell.env("HOME") + "/.config/omarchy/plugins/mus.quran/download.sh"
-  readonly property string cacheScript: Quickshell.env("HOME") + "/.config/omarchy/plugins/mus.quran/cache.sh"
-  readonly property string validateScript: Quickshell.env("HOME") + "/.config/omarchy/plugins/mus.quran/validate_media.sh"
+  // The audio engine is the Go quranproxyd daemon + quranctl CLI. Their paths
+  // are resolved once at startup (onToolProbe): a committed prebuilt binary in
+  // the plugin folder wins, then the user-installed ~/.local/bin copy. When
+  // neither exists, setupRequired turns on and the engine actions fail with a
+  // "run install.sh" hint instead of silently breaking.
+  property string quranctlBinary: ""
+  property bool setupRequired: false
   readonly property string cacheDir: Quickshell.env("HOME") + "/.cache/omarchy/quran"
 
-  // --- streaming cache (invisible to the user; never changes download icons) ---
-  property var cacheFiles: ({})        // "reciter:n" -> true (complete files)
-  property var cacheLastPlayed: ({})   // "reciter:n" -> ms (LRU source, persisted)
-  property var cacheInFlight: ({})     // "reciter:n" -> true (fill queued/running)
-  property var fillQueue: []           // serialized background cache fills
-  property var promotePending: ({})    // explicit download waiting on an in-flight fill
-  property int cacheLimitMb: 500       // eviction budget (persisted)
-  property double cacheSizeBytes: 0    // live cache dir size (for the UI)
-  property var cacheQueue: []          // serialized cache.sh ops (scan/size/promote/evict/clear)
-  property var mushafPlan: null        // { id, allMissing } during full-reciter download
-  property int downloadBaseline: 0     // promoted count framing the mushaf progress bar
+  // --- local range-caching proxy (quranproxyd) ---
+  // The daemon serves non-downloaded surahs at
+  // http://127.0.0.1:<proxyPort>/stream?tok=..&reciter=..&surah=.., validates
+  // and promotes fully-fetched files into dataDir, and reports progress as
+  // `promoted <id> <n>` on stdout. proxyReady turns on only after a valid
+  // handoff file (port + 32-hex token) has been read.
+  property string proxyBinary: ""
+  readonly property string proxyHandoffPath: root.mpvRuntimeDir + "/quranproxy.json"
+  property string proxySocketPath: root.mpvRuntimeDir + "/quranproxy.sock"
+  property int proxyPort: 0
+  property string proxyToken: ""
+  property bool proxyReady: false
+  property int proxySizeBytes: 0      // proxy-owned cache bytes (combined readout)
+  property int proxyFilesCount: 0     // proxy-owned cache files (cacheInfo)
+  property int proxyRestartCount: 0
+
+  // --- proxy control plane (unix socket) ---
+  // The daemon also listens on a unix socket in mpvRuntimeDir (announced as
+  // "sock" in the handoff) and serves raw HTTP over it — the plugin reads
+  // /cache/usage and POSTs /api/cache/clear through a QLocalSocket, the same
+  // primitive mpv uses. No curl, no extra processes.
+
+  property int cacheLimitMb: 500       // eviction budget (persisted; read by the daemon)
 
   // Per-reciter:surah fetch cooldown. After a failed fetch or a forced
-  // playback error on a cached file, re-fetches are refused for
-  // Model.COOLDOWN_MS so repeated IPC/retries cannot become a download storm.
+  // playback error, re-fetches are refused for Model.COOLDOWN_MS so repeated
+  // IPC/retries cannot become a download storm.
   property var fetchCooldowns: ({})    // "reciter:n" -> epoch ms when the window ends
-  property var foregroundFillTarget: null // { key, id, n, autoplay, positionMs } playing after fill
-  property var promoteSingleTarget: null  // { id, n } awaited by promote-single completion
+  property var pendingPlayback: null   // { id, n, autoplay, positionMs } play after download completes
+  property var mushafPending: null     // reciter id whose mushaf download was preempted by playback
+  // Persisted across shell restarts: { id, surah, list, pb? } describing the
+  // download that was in flight when the shell died, so the next instance
+  // resumes it (quranctl re-validates/skips finished files and resumes
+  // interrupted transfers). pb = playback request persisted while preempting a
+  // mushaf. Cleared on completion; one-shot resumed on startup.
+  property var downloadIntent: null
+  property bool downloadResumeTried: false
   property string mpvMprisScript: ""  // resolved mpv-mpris plugin path ("" = not found)
 
   function _inCooldown(id, n) {
@@ -347,21 +370,12 @@ Item {
       root.mpvPaused = true
       if (root.playbackSourceKind === "download" && root.playbackSourceTarget) {
         root.invalidateSurahDownload(root.playbackSourceTarget.id, root.playbackSourceTarget.n)
-      } else if (root.playbackSourceKind === "cache" && root.playbackSourceTarget) {
-        // A corrupt cached file: drop it from the cache maps and delete it so
-        // the next fill re-downloads clean instead of looping the same dead
-        // file forever. The cooldown keeps a forced-error loop from becoming
-        // a download storm — the next retry within 10 s is refused, and any
-        // later retry re-fetches from the CDN.
-        var cid = root.playbackSourceTarget.id
-        var cn = root.playbackSourceTarget.n
-        var ckey = cid + ":" + cn
-        delete root.cacheFiles[ckey]
-        delete root.cacheLastPlayed[ckey]
-        root._markFetchAttempt(cid, cn)
-        root.saveState()
-        root.cacheOp({ mode: "remove-file",
-          command: ["bash", root.cacheScript, "remove", root.cacheDir, cid, String(cn)] })
+      } else if (root.playbackSourceKind === "stream" && root.playbackSourceTarget) {
+        // A proxy stream failed (origin/CDN problem, oversized file, dead
+        // link). The proxy arms its own 10 s cooldown (425) server-side;
+        // mirror it here so an aggressive retry loop cannot re-enter playback
+        // during the window.
+        root._markFetchAttempt(root.playbackSourceTarget.id, root.playbackSourceTarget.n)
       }
       root.errorMessage = Model.tr(root.language, "playbackFailed")
     }
@@ -388,55 +402,52 @@ Item {
     return root.dataDir + "/" + id + "/" + n + ".mp3"
   }
 
-  // Playback source resolution (mpv backend), after permanent-file validation:
-  //   1. explicitly downloaded (validated state dir) -> local file
-  //   2. cached (cache dir, complete)                  -> local file
-  //   3. else                                          -> foreground cache fill,
-  //      then play the local file. mpv never receives a remote URL.
-  function _playFallback(id, n, autoplay, positionMs) {
+  // Playback source resolution (download-only backend). A surah that is not
+  // yet downloaded is streamed through the proxy (validating and promoting
+  // into the state dir) or fetched into the permanent state dir first, then
+  // played. mpv only ever receives local files or the proxy stream URL.
+  function _playSurahOrDownload(id, n, autoplay, positionMs) {
     var shouldPlay = autoplay !== false
     var resumeMs = positionMs || 0
-    var key = id + ":" + n
-    if (root.cacheFiles[key]) {
-      root.touchCache(id, n)
-      root.playbackSourceKind = "cache"
-      root.playbackSourceTarget = { id: id, n: n }
-      root._mpvLoad(Model.localAudioUrl(root.cacheDir, id, n), shouldPlay, resumeMs)
-      root._setMprisMetadata(id, n)
-      root.resumePending = false
-      root.saveState()
+    if (root.isSurahDownloaded(id, n)) {
+      root.requestLocalValidation(id, n, shouldPlay, resumeMs)
       return
     }
-    // Not cached: fetch into the cache (foreground), then play the local
-    // file. A cooldown-blocked or budget-blocked fill fails playback rather
-    // than streaming an unvalidated URL into mpv.
-    root.playbackSourceKind = "cache"
-    root.playbackSourceTarget = { id: id, n: n }
-    if (!root.fillCache(id, n)) {
+    // Stream through the local range-caching proxy; it validates and promotes
+    // the surah to a permanent download on completion (no full-file download
+    // needed before playback starts).
+    if (root.proxyReady && root.proxyPort > 0) {
+      root._playStream(id, n, shouldPlay, resumeMs)
+      return
+    }
+    // Everything else downloads to permanent storage, then plays. Playing a
+    // surah never waits on a full-mushaf download: the mushaf is preempted
+    // and resumes after the requested surah has played (see downloadProc).
+    if (root._inCooldown(id, n)) {
       root.errorMessage = Model.tr(root.language, "playbackFailed")
       return
     }
-    root.foregroundFillTarget = { key: key, id: id, n: n, autoplay: shouldPlay, positionMs: resumeMs }
-    foregroundFillTimer.restart()
-  }
-
-  // Called from fillProc.onExited when the awaited foreground fill finishes.
-  function _onForegroundFillFinished(key, exitCode) {
-    var t = root.foregroundFillTarget
-    if (!t || t.key !== key) return
-    root.foregroundFillTarget = null
-    foregroundFillTimer.stop()
-    if (exitCode === 0 && root.cacheFiles[key]) {
-      root.touchCache(t.id, t.n)
-      root.playbackSourceKind = "cache"
-      root.playbackSourceTarget = { id: t.id, n: t.n }
-      root._mpvLoad(Model.localAudioUrl(root.cacheDir, t.id, t.n), t.autoplay, t.positionMs)
-      root._setMprisMetadata(t.id, t.n)
-      root.resumePending = false
-      root.saveState()
-    } else {
-      root.errorMessage = Model.tr(root.language, "playbackFailed")
+    root.pendingPlayback = { id: id, n: n, autoplay: shouldPlay, positionMs: resumeMs }
+    if (root.downloading) {
+      // A mushaf download (running, or still promoting cached files) is
+      // preempted for playback; other single-surah downloads just queue
+      // behind themselves.
+      if (downloadProc.targetSurah === 0) {
+        root.mushafPending = downloadProc.targetReciter
+        // Persist the playback request with the intent so a shell restart
+        // mid-preempt resumes this surah's download (then the mushaf).
+        if (root.downloadIntent) {
+          var intent = Object.assign({}, root.downloadIntent)
+          intent.pb = { id: id, n: n, autoplay: shouldPlay, positionMs: resumeMs }
+          root.downloadIntent = intent
+          root.saveState()
+        }
+        if (downloadProc.running) downloadProc.running = false
+      }
+      return
     }
+    root._markFetchAttempt(id, n)
+    root.startExplicitDownload(id, n)
   }
 
   function _playNow(id, n) {
@@ -444,14 +455,34 @@ Item {
       root.errorMessage = Model.tr(root.language, "invalidInput")
       return
     }
-    if (root.isSurahDownloaded(id, n)) {
-      root.requestLocalValidation(id, n, true, 0)
+    root._playSurahOrDownload(id, n, true, 0)
+  }
+
+  // Play a non-downloaded surah through the local proxy. The source URL is
+  // built only from already-validated inputs (see _proxyStreamUrl); mpv then
+  // streams it while the proxy fills its cache and, on completion, promotes
+  // the file to a permanent download (onProxyLine -> markSurahDownloaded).
+  function _playStream(id, n, autoplay, positionMs) {
+    var url = root._proxyStreamUrl(id, n)
+    if (url === "") {
+      root.errorMessage = Model.tr(root.language, "playbackFailed")
       return
     }
-    root._playFallback(id, n, true, 0)
+    root.reciterId = id
+    root.surahNumber = n
+    root.playbackSourceKind = "stream"
+    root.playbackSourceTarget = { id: id, n: n }
+    root._setMprisMetadata(id, n)
+    root.resumePending = false
+    root._mpvLoad(url, autoplay, positionMs)
+    root.saveState()
   }
 
   function requestLocalValidation(id, n, autoplay, positionMs) {
+    if (!root.quranctlBinary) {
+      root.errorMessage = Model.tr(root.language, "setupRequired")
+      return
+    }
     var target = { id: id, n: n, autoplay: autoplay !== false, positionMs: positionMs || 0 }
     if (localValidationProc.running) {
       localValidationPlaybackTarget = target
@@ -459,9 +490,10 @@ Item {
     }
     localValidationProc.mode = "playback"
     localValidationProc.target = target
-    // Deep media validation (size, MIME type, ffprobe) — fails closed when
-    // file(1) is missing. A non-zero exit means the local file is unusable.
-    localValidationProc.command = ["bash", root.validateScript, root.localAudioPath(id, n)]
+    // Deep media validation (size, MIME type, ffprobe) via the quranctl
+    // companion binary — fails closed when file(1) is missing. A non-zero
+    // exit means the local file is unusable.
+    localValidationProc.command = [root.quranctlBinary, "validate", root.localAudioPath(id, n)]
     localValidationProc.running = true
   }
 
@@ -504,7 +536,17 @@ Item {
     localValidationProc.mode = ""
     if (target && exitCode !== 0) {
       root.invalidateSurahDownload(target.id, target.n)
-      if (mode === "playback") root._playFallback(target.id, target.n, target.autoplay, target.positionMs)
+      if (mode === "playback") {
+        // Corrupt downloaded file: delete it from disk (fail-closed whitelist
+        // inside quranctl) and refuse re-fetches for the cooldown window so a
+        // bad CDN file can't trigger a re-download loop. A retry after the
+        // window re-fetches clean.
+        localRemoveProc.command = [root.quranctlBinary, "remove", "--state-dir", root.dataDir,
+          target.id, String(target.n)]
+        localRemoveProc.running = true
+        root._markFetchAttempt(target.id, target.n)
+        root.errorMessage = Model.tr(root.language, "playbackFailed")
+      }
     } else if (target && mode === "playback") {
       root.playbackSourceKind = "download"
       root.playbackSourceTarget = target
@@ -532,13 +574,17 @@ Item {
   // Load a source into mpv. `loadfile` replaces whatever is playing, then the
   // pause property pins the desired start state; resume positions are applied
   // on `file-loaded` (mpv can't set time-pos before the file exists).
-  // SECURITY: mpv only ever receives local files. Anything that is not a
-  // file:// URL (a hostile catalog URL, a tampered state file, a stray IPC
-  // call) is refused here — currentSource/lastSource are therefore always
-  // local, and every replay path (playPause, seek, crash recovery) inherits
-  // this guard.
+  // SECURITY: mpv only ever receives local files OR this plugin's own
+  // loopback proxy stream URL (http://127.0.0.1:<proxyPort>/stream?... — the
+  // exact prefix + query we built in _proxyStreamUrl). Anything else — a
+  // hostile catalog URL, a tampered state file, a stray IPC call — is refused
+  // here; currentSource/lastSource are therefore always local or proxy, and
+  // every replay path (playPause, seek, crash recovery) inherits this guard.
   function _mpvLoad(source, autoplay, positionMs) {
-    if (typeof source !== "string" || source.indexOf("file://") !== 0) {
+    var isLocal = (typeof source === "string" && source.indexOf("file://") === 0)
+    var isProxyStream = (typeof source === "string" && root.proxyReady && root.proxyPort > 0
+      && source.indexOf("http://127.0.0.1:" + root.proxyPort + "/stream?") === 0)
+    if (!isLocal && !isProxyStream) {
       root.errorMessage = Model.tr(root.language, "playbackFailed")
       return
     }
@@ -585,6 +631,9 @@ Item {
     root.endHandled = true
     root.resumePosition = 0
     root.savedPosition = 0
+    // An in-flight download keeps running (the file stays useful), but it
+    // must not start playing on completion.
+    root.pendingPlayback = null
     root.saveState()
   }
 
@@ -666,10 +715,7 @@ Item {
     if (root.lastSource !== "") return
     if (!root.resumePending || root.resumePosition <= 0) return
     root.resumePending = false
-    if (root.isSurahDownloaded(root.reciterId, root.surahNumber))
-      root.requestLocalValidation(root.reciterId, root.surahNumber, false, root.resumePosition)
-    else
-      root._playFallback(root.reciterId, root.surahNumber, false, root.resumePosition)
+    root._playSurahOrDownload(root.reciterId, root.surahNumber, false, root.resumePosition)
   }
 
   // --- mpv lifecycle --------------------------------------------------------
@@ -743,24 +789,15 @@ Item {
     // not more than once per reciter:surah inside the cooldown window — even
     // via repeated IPC/retry calls.
     if (root._inCooldown(id, n)) return
-    var key = id + ":" + n
-    // Already fully cached? Promote straight to a permanent download (no network).
-    if (root.cacheFiles[key]) {
-      root.promoteSingleTarget = { id: id, n: n }
-      root.promoteFromCache(id, n)
-      return
-    }
-    // An explicit download takes priority over a background cache fill for
-    // the same surah. Waiting here made the button appear inert after Retry
-    // had started streaming the surah into the cache.
-    if (root.cacheInFlight[key]) {
-      root.cancelCacheFill(key)
-    }
     root._markFetchAttempt(id, n)
     root.startExplicitDownload(id, n)
   }
 
   function startExplicitDownload(id, n) {
+    if (!root.quranctlBinary) {
+      root.errorMessage = Model.tr(root.language, "setupRequired")
+      return
+    }
     root.downloading = true
     root.downloadReciter = id
     root.lastDownload = { id: id, surah: n }
@@ -769,11 +806,14 @@ Item {
     root.errorMessage = ""
     downloadProc.targetReciter = id
     downloadProc.targetSurah = n
+    // Persist the active download so a shell restart resumes it.
+    root.downloadIntent = { id: id, surah: n, list: [n] }
+    root.saveState()
     var reciter = root.reciterFor(id)
-    // stdbuf -oL: download.sh echo progress lines must arrive line-buffered
-    // (piped stdout would otherwise only flush at process exit, freezing the
-    // progress UI at 0% for the whole download).
-    var cmd = ["stdbuf", "-oL", "bash", root.downloadScript, id, String(n)]
+    // quranctl shares the daemon's validation/fetch policy (same internal
+    // packages); it validates the origin URL in-process and reports the
+    // quranctl progress lines (download.sh-compatible) on stdout.
+    var cmd = [root.quranctlBinary, "download", id, String(n)]
     if (reciter && reciter.server) {
       cmd.push("--server")
       cmd.push(reciter.server)
@@ -782,70 +822,59 @@ Item {
     downloadProc.running = true
   }
 
-  function cancelCacheFill(key) {
-    var remaining = []
-    for (var i = 0; i < root.fillQueue.length; i++) {
-      if (root.fillQueue[i] !== key) remaining.push(root.fillQueue[i])
-    }
-    root.fillQueue = remaining
-    delete root.cacheInFlight[key]
-    delete root.promotePending[key]
-    // If this key is currently being fetched, stopping the process prevents
-    // the background cache job from competing with the explicit action.
-    // Its onExited handler will clean up the target and pump the next item.
-    if (fillProc.target === key && fillProc.running)
-      fillProc.running = false
-  }
-
   function downloadMushaf(id) {
     if (root.downloading) return
     // Always validate the complete reciter set. The persisted downloaded flag
     // is only a cache of prior work and cannot prove that files still exist or
-    // are intact. download.sh's complete() check skips valid files and fetches
+    // are intact. quranctl's complete() check skips valid files and fetches
     // only missing/corrupt ones.
     var work = []
     for (var i = 1; i <= 114; i++) work.push(i)
-    var promoteList = []
-    for (var j = 0; j < work.length; j++) {
-      if (root.cacheFiles[id + ":" + work[j]]) promoteList.push(work[j])
-    }
-    var remaining = []
-    for (var k = 0; k < work.length; k++) {
-      if (promoteList.indexOf(work[k]) === -1) remaining.push(work[k])
-    }
     root.downloading = true
     root.downloadReciter = id
     root.lastDownload = { id: id, surah: 0 }
-    // Progress reflects validation/download of all 114 surahs. Cached files
-    // promoted before the process starts form the initial baseline.
-    var baseline = promoteList.length
-    root.downloadDone = baseline
+    // Mark the in-flight target up front so playback can preempt this mushaf
+    // before the process has actually started.
+    downloadProc.targetReciter = id
+    downloadProc.targetSurah = 0
+    // Progress reflects validation/download of all 114 surahs.
+    root.downloadDone = 0
     root.downloadTotal = 114
-    root.downloadBaseline = baseline
     root.errorMessage = ""
-    root.mushafPlan = { id: id, allMissing: work }
-    if (promoteList.length > 0) root.promoteRun(id, promoteList)
-    else root.startMushafDownload(id, remaining)
-  }
-
-  // Move complete cached files into the state dir (permanent). `list` is a
-  // subset of the mushaf's missing set; completion is handled in the cache-op
-  // pump, which then launches `download.sh --only <remaining>` for the rest.
-  function promoteRun(id, list) {
-    root.cacheOp({ mode: "promote",
-      command: ["bash", root.cacheScript, "promote", root.cacheDir, root.dataDir, id, list.join(",")] })
-  }
-
-  function promoteFromCache(id, n) {
-    root.cacheOp({ mode: "promote-single",
-      command: ["bash", root.cacheScript, "promote", root.cacheDir, root.dataDir, id, String(n)] })
+    root.startMushafDownload(id, work)
   }
 
   function startMushafDownload(id, list) {
+    if (!root.quranctlBinary) {
+      root.errorMessage = Model.tr(root.language, "setupRequired")
+      return
+    }
+    // Playback preempted this mushaf while its cached files were being
+    // promoted (the process never started): don't launch it now — serve the
+    // pending playback download first; downloadProc.onExited resumes the
+    // mushaf once nothing else is queued.
+    if (root.mushafPending === id) {
+      var pb = root.pendingPlayback
+      if (pb) {
+        root._markFetchAttempt(pb.id, pb.n)
+        root.startExplicitDownload(pb.id, pb.n)
+      }
+      return
+    }
+    // Announce the download up front (also on the resume path after playback
+    // preempted the mushaf): the widget progress and the downloading guard
+    // depend on this flag being true for the whole run.
+    root.downloading = true
+    root.downloadReciter = id
+    root.lastDownload = { id: id, surah: 0 }
     downloadProc.targetReciter = id
     downloadProc.targetSurah = 0
+    // Persist the active mushaf download (with the exact remaining list) so a
+    // shell restart resumes it where it was interrupted.
+    root.downloadIntent = { id: id, surah: 0, list: list }
+    root.saveState()
     var reciter = root.reciterFor(id)
-    var cmd = ["stdbuf", "-oL", "bash", root.downloadScript, id, "--only", list.join(",")]
+    var cmd = [root.quranctlBinary, "download", id, "--only", list.join(",")]
     if (reciter && reciter.server) {
       cmd.push("--server")
       cmd.push(reciter.server)
@@ -861,6 +890,7 @@ Item {
     root.downloadTotal = 114
     downloadProc.targetReciter = null
     downloadProc.targetSurah = 0
+    root.downloadIntent = null
     root.setReciterStatus(id, "downloaded")
     var next = Object.assign({}, root.downloadedSurahs)
     for (var i = 1; i <= 114; i++) next[id + ":" + i] = true
@@ -891,7 +921,7 @@ Item {
     var m = String(line).match(/^progress\s+(\d+)\/(\d+)\s*$/)
     if (!m) return
     if (downloadProc.targetSurah === 0) {
-      root.downloadDone = Math.min(114, root.downloadBaseline + parseInt(m[1]))
+      root.downloadDone = Math.min(114, parseInt(m[1]))
       root.downloadTotal = 114
     } else {
       root.downloadDone = parseInt(m[1])
@@ -899,205 +929,142 @@ Item {
     }
   }
 
-  // --- streaming cache fills (background, serialized, invisible) -------------
+  // --- proxy cache readout / clear ------------------------------------------
 
-  function touchCache(id, n) {
-    root.cacheLastPlayed[id + ":" + n] = Date.now()
-  }
-
-  function fillCache(id, n) {
-    var key = id + ":" + n
-    if (root.cacheFiles[key]) return true
-    if (root.cacheInFlight[key]) return true
-    // Cooldown gate: failed/forced-error surahs are not re-fetched inside the
-    // window, no matter how often playback or IPC retries them.
-    if (root._inCooldown(id, n)) return false
-    // Budget gate: never fill beyond the cache budget. Eviction stays
-    // post-hoc LRU; this check only prevents the cache from growing while an
-    // eviction is pending or the budget was lowered.
-    if (root.cacheSizeBytes + Model.MAX_SURAH_BYTES > root.cacheLimitMb * 1048576) {
-      root.runEviction()
-      return false
-    }
-    root.cacheInFlight[key] = true
-    root.fillQueue.push(key)
-    root.pumpFillQueue()
-    return true
-  }
-
-  function pumpFillQueue() {
-    if (fillProc.running) return
-    if (root.fillQueue.length === 0) return
-    var key = root.fillQueue.shift()
-    var parts = root.splitKey(key)
-    // Re-validate at dequeue time: state may have changed since enqueue.
-    if (root.cacheFiles[key] || root._inCooldown(parts[0], parts[1])) {
-      delete root.cacheInFlight[key]
-      root.pumpFillQueue()
-      return
-    }
-    if (root.cacheSizeBytes + Model.MAX_SURAH_BYTES > root.cacheLimitMb * 1048576) {
-      delete root.cacheInFlight[key]
-      root.pumpFillQueue()
-      return
-    }
-    var reciter = root.reciterFor(parts[0])
-    fillProc.target = key
-    // download.sh enforces the same budget on its side (defense in depth).
-    var cmd = ["bash", root.downloadScript, parts[0], parts[1], "--dest", root.cacheDir,
-      "--budget-bytes", String(root.cacheLimitMb * 1048576)]
-    if (reciter && reciter.server) {
-      cmd.push("--server")
-      cmd.push(reciter.server)
-    }
-    fillProc.command = cmd
-    fillProc.running = true
-  }
-
-  function splitKey(key) {
-    var sep = key.lastIndexOf(":")
-    return [key.substring(0, sep), key.substring(sep + 1)]
-  }
-
-  // --- cache.sh ops (scan/size/promote/evict/clear), serialized --------------
-
-  function cacheOp(op) {
-    root.cacheQueue.push(op)
-    root.pumpCacheOps()
-  }
-
-  function pumpCacheOps() {
-    if (cacheProc.running) return
-    if (root.cacheQueue.length === 0) return
-    var op = root.cacheQueue.shift()
-    cacheProc.mode = op.mode
-    cacheProc.collected = ""
-    cacheProc.command = op.command
-    cacheProc.running = true
-  }
-
-  function runEviction() {
-    var args = root.lastPlayedArgs()
-    var cmd = ["bash", root.cacheScript, "evict", root.cacheDir, String(root.cacheLimitMb)]
-    for (var i = 0; i < args.length; i++) cmd.push(args[i])
-    root.cacheOp({ mode: "evict", command: cmd })
-  }
-
+  // Best-effort refresh of the proxy-owned cache bytes for the "Cache:"
+  // readout. On any failure (daemon down, socket busy) keep the last value.
   function refreshCacheSize() {
-    root.cacheOp({ mode: "size", command: ["bash", root.cacheScript, "size", root.cacheDir] })
+    if (!root.proxyReady || root.proxyPort === 0) return
+    root._proxyHttp("GET", "/cache/usage", function(data) {
+      if (data && typeof data.bytes === "number" && isFinite(data.bytes)) {
+        root.proxySizeBytes = Math.max(0, Math.round(data.bytes))
+      }
+      if (data && typeof data.files === "number" && isFinite(data.files)) {
+        root.proxyFilesCount = Math.max(0, Math.round(data.files))
+      }
+    })
   }
 
+  // Wipe the proxy-owned cache (token-authenticated POST on the control
+  // socket). The files are .dat/.meta.json only — the legacy *.mp3 leftovers
+  // in the cache dir are the user's to clean up manually.
   function clearCache() {
-    var keep = []
-    for (var key in root.cacheInFlight) {
-      keep.push(root.cacheDir + "/" + root.cacheRelPath(key) + ".mp3.part")
+    if (!root.proxyReady || root.proxyPort === 0) {
+      root.errorMessage = Model.tr(root.language, "cacheClearFailed")
+      return
     }
-    var cmd = ["bash", root.cacheScript, "clear", root.cacheDir]
-    for (var i = 0; i < keep.length; i++) cmd.push(keep[i])
-    root.cacheOp({ mode: "clear", command: cmd })
+    root._proxyHttp("POST", "/api/cache/clear?tok=" + root.proxyToken, function(data) {
+      if (data && data.cleared) root.refreshCacheSize()
+    })
   }
 
-  function cacheRelPath(key) {
-    var parts = root.splitKey(key)
-    return parts[0] + "/" + parts[1]
+  // One-shot HTTP request over the daemon's control-plane unix socket. The
+  // daemon's responses are single-line JSON, so the body is the last parsed
+  // line of the response; headers are discarded. Failures are silent (the
+  // readout keeps its last value).
+  function _proxyHttp(method, path, onData) {
+    if (!root.proxyReady || root.proxyPort === 0) return
+    proxyHttpSocket.pending = { method: method, path: path, onData: onData }
+    proxyHttpSocket.path = root.proxySocketPath
+    proxyHttpSocket.connected = true
   }
 
-  // Only pass LRU timestamps for files still present in the cache.
-  function lastPlayedArgs() {
-    var args = []
-    for (var k in root.cacheLastPlayed) {
-      if (root.cacheFiles[k]) args.push(k + "=" + root.cacheLastPlayed[k])
+  // --- quranproxyd lifecycle + events ---------------------------------------
+
+  // Locate the audio-engine binaries once, at startup. The probe prefers a
+  // committed prebuilt binary inside the plugin folder (works straight after
+  // `omarchy plugin add`), then a user-installed copy in ~/.local/bin (dev /
+  // install.sh). Any binary not found flips setupRequired so engine actions
+  // show a clear setup hint instead of failing silently.
+  function onToolProbe(out) {
+    var found = {}
+    var lines = String(out || "").split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var parts = lines[i].split(" ")
+      if (parts.length >= 2 && parts[0] && parts[1]) {
+        found[parts[0]] = parts[1]
+      }
     }
-    if (args.length === 0) return []
-    var out = ["--last-played"]
-    for (var i = 0; i < args.length; i++) out.push(args[i])
-    return out
+    if (found["quranproxyd"]) root.proxyBinary = found["quranproxyd"]
+    if (found["quranctl"]) root.quranctlBinary = found["quranctl"]
+    root.setupRequired = !found["quranproxyd"] || !found["quranctl"]
+    if (root.setupRequired) {
+      root.errorMessage = Model.tr(root.language, "setupRequired")
+    }
   }
 
-  function onCacheOpDone(mode, exitCode, out) {
-    var lines = out.split("\n")
-    var i, m, key, parts
-    if (mode === "scan") {
-      // Rebuild the map from scratch rather than merging: purges ghost
-      // entries (including any pre-existing flat <cacheDir>/<n>.mp3 from
-      // older builds, which never match "<reciter>/<n>.mp3"). Entries are
-      // routed through the same whitelist loadState uses — don't blindly
-      // trust scan output even though cache.sh constrains it.
-      var rebuilt = {}
-      for (i = 0; i < lines.length; i++) {
-        m = lines[i].match(/^(\S+)\/(\d+)\.mp3$/)
-        if (!m) continue
-        var rid = m[1]
-        var rnum = parseInt(m[2], 10)
-        if (!Model.isSafeIdentifier(rid)) continue
-        if (!Model.isValidSurahNumber(rnum)) continue
-        rebuilt[rid + ":" + rnum] = true
-      }
-      root.cacheFiles = rebuilt
-    } else if (mode === "size") {
-      root.cacheSizeBytes = parseInt(out) || 0
-    } else if (mode === "promote" || mode === "promote-single") {
-      // "moved reciter/n" lines: those files left the cache for the state dir.
-      var moved = []
-      for (i = 0; i < lines.length; i++) {
-        m = lines[i].match(/^moved (\S+)\/(\d+)$/)
-        if (!m) continue
-        key = m[1] + ":" + m[2]
-        delete root.cacheFiles[key]
-        delete root.cacheLastPlayed[key]
-        root.markSurahDownloaded(m[1], parseInt(m[2]))
-        moved.push(m[2])
-      }
-      if (mode === "promote-single") {
-        if (moved.length === 0 && root.promoteSingleTarget) {
-          // The cached file is actually missing (or the move failed): fall
-          // back to a real download instead of silently no-op'ing.
-          var ps = root.promoteSingleTarget
-          root.promoteSingleTarget = null
-          if (!root._inCooldown(ps.id, ps.n)) {
-            root._markFetchAttempt(ps.id, ps.n)
-            root.startExplicitDownload(ps.id, ps.n)
-          } else {
-            root.downloading = false
-            root.errorMessage = Model.tr(root.language, "downloadFailed")
-          }
-        } else {
-          root.promoteSingleTarget = null
-          root.downloading = false
-        }
-      } else if (root.mushafPlan) {
-        var plan = root.mushafPlan
-        root.mushafPlan = null
-        var remaining = []
-        for (i = 0; i < plan.allMissing.length; i++) {
-          var n = plan.allMissing[i]
-          if (moved.indexOf(String(n)) === -1) remaining.push(n)
-        }
-        // downloadBaseline/downloadDone were set in downloadMushaf and already
-        // include the promoted files — keep them, download.sh adds on top.
-        if (remaining.length > 0) root.startMushafDownload(plan.id, remaining)
-        else root.finishMushafDownload(plan.id)
-      }
-      root.refreshCacheSize()
-    } else if (mode === "evict") {
-      for (i = 0; i < lines.length; i++) {
-        m = lines[i].match(/^deleted (\S+)\/(\d+)\.mp3$/)
-        if (!m) continue
-        key = m[1] + ":" + m[2]
-        delete root.cacheFiles[key]
-        delete root.cacheLastPlayed[key]
-      }
-      root.refreshCacheSize()
-    } else if (mode === "clear") {
-      var drop = []
-      for (var k in root.cacheFiles) if (!root.cacheInFlight[k]) drop.push(k)
-      for (i = 0; i < drop.length; i++) delete root.cacheFiles[drop[i]]
-      drop = []
-      for (var k2 in root.cacheLastPlayed) if (!root.cacheInFlight[k2]) drop.push(k2)
-      for (i = 0; i < drop.length; i++) delete root.cacheLastPlayed[drop[i]]
-      root.saveState()
-      root.refreshCacheSize()
+  // Start the range-caching proxy. The Go daemon reads the catalog from
+  // statePath (watched for changes), promotes into dataDir, and writes the
+  // handoff file on startup.
+  function _startProxy() {
+    if (root.shuttingDown || proxyProc.running) return
+    if (root.proxyRestartCount >= 5) return
+    if (!root.proxyBinary) {
+      root.errorMessage = Model.tr(root.language, "setupRequired")
+      return
     }
+    proxyProc.command = [root.proxyBinary, "--state-file", root.statePath,
+      "--state-dir", root.dataDir, "--cache-dir", root.cacheDir,
+      "--token-file", root.proxyHandoffPath]
+    proxyProc.running = true
+  }
+
+  // mpv source builder for the proxy stream endpoint. id/n are already
+  // validated by callers; the guard re-checks so a stray call cannot craft a
+  // URL with a hostile reciter.
+  function _proxyStreamUrl(id, n) {
+    if (!Model.isSafeReciterArg(id) || !Model.isValidSurahNumber(n)) return ""
+    return "http://127.0.0.1:" + root.proxyPort + "/stream?tok=" + root.proxyToken
+      + "&reciter=" + id + "&surah=" + n
+  }
+
+  // Handle a line of proxy stdout: `promoted <id> <n>` means a surah was
+  // fully fetched, media-validated and atomically moved into dataDir — record
+  // it as a permanent download (the widget/download UI then treats it like any
+  // other downloaded surah; subsequent plays use the local file).
+  function onProxyLine(line) {
+    var m = String(line).match(/^promoted (\S+) (\d+)$/)
+    if (!m) return
+    if (!Model.isSafeIdentifier(m[1])) return
+    var n = parseInt(m[2], 10)
+    if (!Model.isValidSurahNumber(n)) return
+    root.markSurahDownloaded(m[1], n)
+    root.refreshCacheSize()
+  }
+
+  // Parse the daemon's handoff file ({ port, token }). Only a valid port and
+  // 32-hex token enable proxy playback; anything else leaves proxyReady false
+  // and playback falls back to the download-then-play path.
+  function onProxyHandoff(json) {
+    var data = null
+    try { data = JSON.parse(String(json || "")) } catch (e) { data = null }
+    if (!data) return
+    var port = parseInt(data.port, 10)
+    if (!isFinite(port) || port < 1 || port > 65535) return
+    var tok = String(data.token || "")
+    if (!/^[0-9a-f]{32}$/.test(tok)) return
+    // The control-plane socket path must be an absolute path under our own
+    // runtime dir (which the daemon shares) — anything else is refused; the
+    // default derivation stays.
+    if (typeof data.sock === "string" && root._isSafeSocketPath(data.sock)) {
+      root.proxySocketPath = data.sock
+    }
+    root.proxyPort = port
+    root.proxyToken = tok
+    root.proxyReady = true
+  }
+
+  // The socket path is trusted only when it is absolute and lives under
+  // mpvRuntimeDir (no "..", no control characters). mpvRuntimeDir itself is
+  // derived in this file, never from the handoff.
+  function _isSafeSocketPath(p) {
+    if (p.indexOf(root.mpvRuntimeDir + "/") !== 0) return false
+    if (p.indexOf("..") !== -1) return false
+    for (var i = 0; i < p.length; i++) {
+      var c = p.charCodeAt(i)
+      if (c < 32 || c === 127) return false
+    }
+    return true
   }
 
   // --- reciter catalog fetch (with cache) ---
@@ -1175,11 +1142,11 @@ Item {
       position: root.savedPosition,
       wasPlaying: root.isPlaying,
       cacheLimitMb: root.cacheLimitMb,
-      cacheLastPlayed: root.cacheLastPlayed,
       reciters: root.reciters,
       catalogFetchedAt: root.catalogFetchedAt,
       reciterStatus: root.reciterStatus,
-      downloadedSurahs: root.downloadedSurahs
+      downloadedSurahs: root.downloadedSurahs,
+      downloadIntent: root.downloadIntent
     }
     stateFile.setText(JSON.stringify(state))
   }
@@ -1256,32 +1223,42 @@ Item {
       root.queueDownloadedFileValidation()
     }
 
+    // A download interrupted by a shell restart: sanitize the persisted
+    // intent (identifier, surah, bounded list, optional playback request)
+    // so junk can't reintroduce unsafe values or unbounded state.
+    if (data.downloadIntent && typeof data.downloadIntent === "object") {
+      var di = data.downloadIntent
+      var diId = (typeof di.id === "string" && Model.isSafeIdentifier(di.id)) ? di.id : ""
+      var diSurah = (typeof di.surah === "number" && di.surah >= 0 && di.surah <= 114) ? di.surah : 0
+      var diList = []
+      if (Array.isArray(di.list)) {
+        for (var li = 0; li < di.list.length && diList.length < 114; li++) {
+          var ln = parseInt(di.list[li], 10)
+          if (Model.isValidSurahNumber(ln) && diList.indexOf(ln) === -1) diList.push(ln)
+        }
+      }
+      if (diId !== "" && diList.length > 0) {
+        var cleanIntent = { id: diId, surah: diSurah, list: diList }
+        if (di.pb && typeof di.pb === "object"
+            && Model.isSafeIdentifier(di.pb.id)
+            && Model.isValidSurahNumber(di.pb.n)) {
+          cleanIntent.pb = {
+            id: di.pb.id,
+            n: di.pb.n,
+            autoplay: di.pb.autoplay !== false,
+            positionMs: (typeof di.pb.positionMs === "number" && isFinite(di.pb.positionMs)
+              && di.pb.positionMs >= 0 && di.pb.positionMs <= 24 * 60 * 60 * 1000) ? di.pb.positionMs : 0
+          }
+        }
+        root.downloadIntent = cleanIntent
+      }
+    }
+
     // Cache budget is user-tunable via quran.json (sanitized to a sane range).
     if (typeof data.cacheLimitMb === "number" && data.cacheLimitMb >= 100 && data.cacheLimitMb <= 10000) {
       root.cacheLimitMb = data.cacheLimitMb
     } else {
       root.cacheLimitMb = 500
-    }
-    if (data.cacheLastPlayed && typeof data.cacheLastPlayed === "object") {
-      // Same key whitelist as downloadedSurahs; values must be finite ms
-      // timestamps within safe-integer range.
-      var clpClean = {}
-      for (var ck in data.cacheLastPlayed) {
-        var csep = ck.lastIndexOf(":")
-        if (csep <= 0) continue
-        var cid = ck.substring(0, csep)
-        var cnumStr = ck.substring(csep + 1)
-        var cnum = parseInt(cnumStr, 10)
-        if (!Model.isSafeIdentifier(cid)) continue
-        if (!Model.isValidSurahNumber(cnum)) continue
-        if (String(cnum) !== cnumStr) continue
-        var cv = data.cacheLastPlayed[ck]
-        if (typeof cv !== "number" || !isFinite(cv) || cv < 0 || cv > Number.MAX_SAFE_INTEGER) continue
-        clpClean[ck] = cv
-      }
-      root.cacheLastPlayed = clpClean
-    } else {
-      root.cacheLastPlayed = {}
     }
 
     // Resume: restore last surah but stay paused; seek after the media loads.
@@ -1295,23 +1272,85 @@ Item {
     }
 
     root.stateLoaded = true
+    root._resumeInterruptedDownload()
     root._maybeResume()
     if (data.version !== Model.STATE_VERSION) root.saveState()
+  }
+
+  // After a shell restart, resume the download that was in flight when the
+  // previous instance died. Runs exactly once per service instance (the state
+  // file is watched and reloaded on every save, which must not re-trigger it).
+  // quranctl re-validates finished files and skips them, and resumes
+  // interrupted transfers from their partial files. If a playback request was
+  // persisted while preempting a mushaf, that surah downloads (and plays)
+  // first — the mushaf then resumes through the same onExited chain.
+  // _maybeResume may also preempt the mushaf with the user's last surah via
+  // the normal play path.
+  function _resumeInterruptedDownload() {
+    if (root.downloadResumeTried) return
+    root.downloadResumeTried = true
+    if (root.shuttingDown || !root.downloadIntent) return
+    var intent = root.downloadIntent
+    if (!root.reciterFor(intent.id)) {
+      // Unknown reciter (stale catalog or tampered state): nothing to fetch,
+      // and a lingering intent must not wedge the service.
+      root.downloadIntent = null
+      root.saveState()
+      return
+    }
+    if (intent.pb) {
+      if (root.isSurahDownloaded(intent.pb.id, intent.pb.n)) {
+        root.requestLocalValidation(intent.pb.id, intent.pb.n, intent.pb.autoplay, intent.pb.positionMs)
+      } else {
+        // Serve the preempted playback first; mushafPending chains the mushaf
+        // resume in downloadProc.onExited.
+        root.pendingPlayback = { id: intent.pb.id, n: intent.pb.n,
+          autoplay: intent.pb.autoplay, positionMs: intent.pb.positionMs }
+        root.mushafPending = intent.id
+        root.startExplicitDownload(intent.pb.id, intent.pb.n)
+        return
+      }
+    }
+    if (intent.surah === 0) {
+      if (root.isMushafDownloaded(intent.id)) {
+        root.downloadIntent = null
+        root.saveState()
+        return
+      }
+      root.startMushafDownload(intent.id, intent.list)
+    } else {
+      if (root.isSurahDownloaded(intent.id, intent.surah)) {
+        root.downloadIntent = null
+        root.saveState()
+        return
+      }
+      root.startExplicitDownload(intent.id, intent.surah)
+    }
   }
 
   // --- init ---
 
   Component.onCompleted: {
     root.fetchReciters()
-    root.cacheOp({ mode: "scan", command: ["bash", root.cacheScript, "scan", root.cacheDir] })
-    root.cacheOp({ mode: "size", command: ["bash", root.cacheScript, "size", root.cacheDir] })
     sockCleanProc.running = true
     mprisFindProc.running = true
+    // Resolve the audio-engine binaries first; _startProxy is a no-op until
+    // they are found (or setupRequired is set).
+    toolProbeProc.command = ["bash", "-c",
+      'arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) arch="";; esac;'
+      + ' plugin="$HOME/.config/omarchy/plugins/mus.quran/prebuilt/$arch";'
+      + ' for b in quranproxyd quranctl; do c="";'
+      + '   [ -n "$arch" ] && [ -x "$plugin/$b" ] && c="$plugin/$b";'
+      + '   [ -z "$c" ] && [ -x "$HOME/.local/bin/$b" ] && c="$HOME/.local/bin/$b";'
+      + '   [ -n "$c" ] && echo "$b $c"; done']
+    toolProbeProc.running = true
   }
 
   Component.onDestruction: {
     root.shuttingDown = true
     mpvConnectTimer.stop()
+    proxyRestartTimer.stop()
+    proxyProc.running = false
     if (root.mpvSock) {
       root.mpvSock.connected = false
       root.mpvSock.destroy()
@@ -1423,19 +1462,6 @@ Item {
     }
   }
 
-  // Bound on a foreground cache fill: if the fill hasn't completed within 120
-  // seconds the playback attempt fails and the surah is left for a (cooldown-
-  // gated) background retry.
-  Timer {
-    id: foregroundFillTimer
-    interval: 120000
-    repeat: false
-    onTriggered: {
-      root.foregroundFillTarget = null
-      root.errorMessage = Model.tr(root.language, "playbackFailed")
-    }
-  }
-
   // Periodic position save while playing.
   Timer {
     id: positionSaveTimer
@@ -1500,29 +1526,74 @@ Item {
     onExited: function(exitCode) {
       var id = downloadProc.targetReciter
       var n = downloadProc.targetSurah
+      // A full-mushaf download deliberately cancelled because playback
+      // preempted it: not a failure, and not a completion either — the mushaf
+      // resumes below once no playback download is queued.
+      var preempted = (n === 0 && root.mushafPending === id)
       root.downloading = false
-      if (exitCode === 0) {
+      if (exitCode === 0 && !preempted) {
         if (n > 0) {
           root._clearCooldown(id, n)
           root.markSurahDownloaded(id, n)
+          // A completed single-surah download clears its own persisted intent.
+          // (A mushaf intent is owned by startMushafDownload / the resume.)
+          if (root.downloadIntent
+              && root.downloadIntent.surah === n
+              && root.downloadIntent.id === id) {
+            root.downloadIntent = null
+            root.saveState()
+          }
         } else {
           root.finishMushafDownload(id)
           id = null
           n = 0
         }
-        } else if (id) {
+      } else if (id && !preempted) {
         if (n > 0) {
           // Single-surah failure: surface it through the existing inline
-          // error pattern; the icon reverts and a retry re-runs download.sh.
+          // error pattern; the icon reverts and a retry re-runs quranctl.
           root.errorMessage = Model.tr(root.language, "downloadFailed")
         } else {
-          // Partial mushaf: keep what finished; a retry resumes (curl -C -).
+          // Partial mushaf: keep what finished; a retry resumes (quranctl
+          // skips complete files and resumes partial ones).
           // Always surface the failure, including a previously-declined
           // reciter; the old branch made an instant script failure invisible.
           root.errorMessage = Model.tr(root.language, "downloadFailed")
           if (root.reciterStatus[id] !== "downloaded")
             root.setReciterStatus(id, "failed")
         }
+      }
+      // Playback waiting on this exact download: validate and play it now.
+      if (exitCode === 0 && n > 0 && root.pendingPlayback
+          && root.pendingPlayback.id === id && root.pendingPlayback.n === n) {
+        var pb = root.pendingPlayback
+        root.pendingPlayback = null
+        root.requestLocalValidation(id, n, pb.autoplay, pb.positionMs)
+      }
+      // A playback request queued behind this download: start it. (This also
+      // serves a playback preempting a running mushaf — the mushaf's own exit
+      // lands here and hands off to the requested surah's download.)
+      if (root.pendingPlayback && !root.downloading) {
+        var queued = root.pendingPlayback
+        root.pendingPlayback = null
+        if (queued && queued.id && queued.n) {
+          if (root.isSurahDownloaded(queued.id, queued.n)) {
+            root.requestLocalValidation(queued.id, queued.n, queued.autoplay, queued.positionMs)
+          } else if (!root._inCooldown(queued.id, queued.n)) {
+            root._markFetchAttempt(queued.id, queued.n)
+            root.startExplicitDownload(queued.id, queued.n)
+          } else {
+            root.errorMessage = Model.tr(root.language, "playbackFailed")
+          }
+        }
+      }
+      // A preempted mushaf resumes once no playback download is pending.
+      if (root.mushafPending && !root.downloading) {
+        var mid = root.mushafPending
+        root.mushafPending = null
+        var work = []
+        for (var mi = 1; mi <= 114; mi++) work.push(mi)
+        root.startMushafDownload(mid, work)
       }
       downloadProc.targetReciter = null
       downloadProc.targetSurah = 0
@@ -1531,47 +1602,89 @@ Item {
   }
 
   Process {
-    id: fillProc
-    property string target: ""
-    stdout: StdioCollector { waitForEnd: true }
-    onExited: function(exitCode) {
-      var key = fillProc.target
-      fillProc.target = ""
-      delete root.cacheInFlight[key]
-      var parts = root.splitKey(key)
-      if (exitCode === 0) {
-        root.cacheFiles[key] = true
-        root.touchCache(parts[0], parts[1])
-        root._clearCooldown(parts[0], parts[1])
-        root.saveState()
-        root.runEviction()
-        root.refreshCacheSize()
-      }
-      if (root.promotePending[key]) {
-        delete root.promotePending[key]
-        if (exitCode === 0) root.promoteFromCache(parts[0], parts[1])
-      }
-      root._onForegroundFillFinished(key, exitCode)
-      root.pumpFillQueue()
+    id: localRemoveProc
+    running: false
+  }
+
+  // One-shot startup probe that locates the audio-engine binaries (see
+  // Component.onCompleted). Its output is "name path" lines.
+  Process {
+    id: toolProbeProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.onToolProbe(text)
     }
   }
 
+  // quranproxyd: range-caching stream proxy. Its stdout is the `promoted`
+  // event channel consumed by onProxyLine; on an abnormal exit the proxy is
+  // restarted (bounded) and proxyReady drops so playback falls back to the
+  // download path until the handoff reappears.
   Process {
-    id: cacheProc
-    property string mode: ""
-    property string collected: ""
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: cacheProc.collected = text
-    }
+    id: proxyProc
+    running: false
+    stdout: SplitParser { onRead: function(line) { root.onProxyLine(line) } }
     onExited: function(exitCode) {
-      var mode = cacheProc.mode
-      var out = cacheProc.collected || ""
-      cacheProc.mode = ""
-      cacheProc.collected = ""
-      root.onCacheOpDone(mode, exitCode, out)
-      root.pumpCacheOps()
+      root.proxyReady = false
+      root.proxyPort = 0
+      root.proxyToken = ""
+      if (!root.shuttingDown && root.proxyRestartCount < 5) {
+        root.proxyRestartCount++
+        proxyRestartTimer.restart()
+      }
     }
+  }
+
+  Timer {
+    id: proxyRestartTimer
+    interval: 2000
+    onTriggered: root._startProxy()
+  }
+
+  // Watches the daemon's handoff file ({ port, token }), written atomically
+  // right after the proxy binds its listener.
+  FileView {
+    id: proxyHandoffFile
+    path: root.proxyHandoffPath
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.onProxyHandoff(text())
+    onFileChanged: reload()
+  }
+
+  // One-shot HTTP client on the daemon's control-plane unix socket (see
+  // _proxyHttp). The daemon responds with single-line JSON bodies, so the
+  // parser's last line before disconnect is the JSON; header lines are
+  // ignored. `pending` holds the { method, path, onData } of the in-flight
+  // request; the request is written when the socket connects, and the socket
+  // is closed once a JSON line arrives.
+  Socket {
+    id: proxyHttpSocket
+    property var pending: null
+    parser: SplitParser {
+      onRead: function(line) {
+        var p = proxyHttpSocket.pending
+        if (!p || String(line).indexOf("{") !== 0) return
+        proxyHttpSocket.pending = null
+        var data = null
+        try { data = JSON.parse(String(line)) } catch (e) { data = null }
+        proxyHttpSocket.connected = false
+        if (data && p.onData) p.onData(data)
+      }
+    }
+    onConnectionStateChanged: {
+      if (connected && proxyHttpSocket.pending) {
+        var p = proxyHttpSocket.pending
+        proxyHttpSocket.write(p.method + " " + p.path + " HTTP/1.1\r\n"
+          + "Host: localhost\r\nConnection: close\r\n\r\n")
+        proxyHttpSocket.flush()
+      } else if (!connected) {
+        // Daemon closed the connection (or never accepted it): the in-flight
+        // request is dead — drop it so the next poll starts fresh.
+        proxyHttpSocket.pending = null
+      }
+    }
+    onError: function() { proxyHttpSocket.pending = null }
   }
 
   // Prepare the mpv runtime dir (0700) and remove any stale IPC socket before
@@ -1690,10 +1803,10 @@ Item {
 
     function cacheInfo(): string {
       return JSON.stringify({
-        sizeBytes: root.cacheSizeBytes,
+        sizeBytes: root.proxySizeBytes,
         limitMb: root.cacheLimitMb,
-        files: Object.keys(root.cacheFiles).length,
-        inflight: Object.keys(root.cacheInFlight).length
+        files: root.proxyFilesCount,
+        inflight: 0
       })
     }
   }

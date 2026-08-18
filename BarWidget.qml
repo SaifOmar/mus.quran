@@ -946,7 +946,7 @@ BarWidget {
                         anchors.right: parent.right
                         anchors.rightMargin: Style.space(12)
                         anchors.verticalCenter: parent.verticalCenter
-                        text: quranService ? root.trArgs("cacheSize", [Model.formatSize(quranService.cacheSizeBytes)]) : ""
+                        text: quranService ? root.trArgs("cacheSize", [Model.formatSize(quranService.proxySizeBytes)]) : ""
                         color: root.mutedC
                         font.family: root.bar.fontFamily
                         font.pixelSize: Style.font.caption
