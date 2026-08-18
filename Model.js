@@ -20,8 +20,8 @@ var DEFAULT_LANGUAGE = "en"
 var DEFAULT_RECITER = "ar.alafasy"
 var CDN_BASE = "https://cdn.islamic.app/quran/audio-surah"
 var API_RECITERS = "https://api.islamic.app/v1/audio/reciters"
-var API_RECITERS_ENG = "https://mp3quran.net/api/v3/reciters?language=eng"
-var API_RECITERS_AR = "https://mp3quran.net/api/v3/reciters?language=ar"
+var API_RECITERS_ENG = "https://www.mp3quran.net/api/v3/reciters?language=eng"
+var API_RECITERS_AR = "https://www.mp3quran.net/api/v3/reciters?language=ar"
 
 var STATE_VERSION = 2
 var CATALOG_TTL_MS = 24 * 60 * 60 * 1000

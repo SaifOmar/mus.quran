@@ -990,6 +990,10 @@ Item {
     root.setupRequired = !found["quranproxyd"] || !found["quranctl"]
     if (root.setupRequired) {
       root.errorMessage = Model.tr(root.language, "setupRequired")
+    } else {
+      // Binaries are resolved now; start the streaming daemon. (Component
+      // onCompleted must not call _startProxy before the probe lands.)
+      root._startProxy()
     }
   }
 
