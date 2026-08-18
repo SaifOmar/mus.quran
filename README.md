@@ -66,6 +66,13 @@ To completely remove the mus.quran engine and its local data:
 ./uninstall.sh
 ```
 
+If you installed the engine with a custom prefix, pass the same prefix when
+uninstalling:
+
+```sh
+./uninstall.sh --prefix "$HOME/.local/share/bin"
+```
+
 The uninstall script removes the installed `quranproxyd` and `quranctl`
 binaries along with mus.quran's downloaded audio, cache, and settings.
 
@@ -81,7 +88,7 @@ make build          # dev build into ./bin (unstripped)
 make install        # installs ./bin binaries into ~/.local/bin
 make prebuilt       # static, stripped binaries for amd64 + arm64
 make dist           # tar.gz + SHA-256 archives per arch (for releases)
-make test            # Go unit tests
+make test           # Go unit tests
 ```
 
 The Go module has **zero external dependencies** (`go.mod` has no `require`
@@ -109,19 +116,18 @@ This plugin was written with the security model of the Omarchy shell in mind
 
 * Left-click the bar icon to open the popup and select a surah to play.
 * Right/middle-click toggles play/pause; scroll wheel moves prev/next surah.
-* `j`/`k` + `Enter` navigate the lists; the first reciter selection offers a
-  full-mushaf download.
 
 ### IPC
 
 The service registers as the `quran` IPC target:
 
 ```sh
-``omarchy-shell quran status
+omarchy-shell quran status
 omarchy-shell quran playSurah <reciter> <surah>
 omarchy-shell quran download <reciter> [surah]
 omarchy-shell quran cacheInfo
-omarchy-shell quran clearCache`
+omarchy-shell quran clearCache
+```
 
 ## Special Thanks
 
