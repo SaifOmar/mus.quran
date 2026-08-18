@@ -1,4 +1,3 @@
-```bash
 #!/usr/bin/env bash
 # Uninstall the mus.quran audio engine and all local mus.quran data.
 #
@@ -11,11 +10,42 @@
 # Idempotent, never needs sudo (only touches the user's own dirs).
 #
 # Usage:
+#   uninstall.sh
+#   uninstall.sh --prefix DIR
+#
+# Examples:
 #   ./uninstall.sh
+#   ./uninstall.sh --prefix "$HOME/.local/share/bin"
 
 set -euo pipefail
 
 PREFIX="${PREFIX:-$HOME/.local/bin}"
+
+usage() {
+  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+  exit 0
+}
+
+while (($# > 0)); do
+  case "$1" in
+  --prefix)
+    if (($# < 2)); then
+      echo "uninstall.sh: --prefix requires a directory" >&2
+      exit 2
+    fi
+    PREFIX="$2"
+    shift
+    ;;
+  -h | --help)
+    usage
+    ;;
+  *)
+    echo "uninstall.sh: unknown option: $1" >&2
+    exit 2
+    ;;
+  esac
+  shift
+done
 
 removed=0
 
@@ -48,4 +78,3 @@ done
 
 echo "uninstall.sh: mus.quran has been uninstalled."
 echo "uninstall.sh: restart your Omarchy shell (or disable/remove the plugin) to unload the engine."
-```
