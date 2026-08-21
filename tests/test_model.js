@@ -272,5 +272,34 @@ ok("localAudioUrl: bad reciter rejected", M.localAudioUrl("/data", "../etc", 1) 
 ok("localAudioUrl: bad surah rejected", M.localAudioUrl("/data", "ar.alafasy", 115) === "");
 ok("MAX_SURAH_BYTES is 314572800", M.MAX_SURAH_BYTES === 314572800);
 
+// ---------------------------------------------------------------------------
+// configurable storage roots (download folder + legacy roots)
+// ---------------------------------------------------------------------------
+ok("sanitizeDirPath: empty allowed (reset)", M.sanitizeDirPath("", "/home/u") === "");
+ok("sanitizeDirPath: blank allowed", M.sanitizeDirPath("  ", "/home/u") === "");
+ok("sanitizeDirPath: tilde expands", M.sanitizeDirPath("~/music", "/home/u") === "/home/u/music");
+ok("sanitizeDirPath: trailing slash trimmed", M.sanitizeDirPath("/a/b/", "/home/u") === "/a/b");
+ok("sanitizeDirPath: duplicate slashes collapsed", M.sanitizeDirPath("//a///b", "/home/u") === "/a/b");
+ok("sanitizeDirPath: relative rejected", M.sanitizeDirPath("relative", "/home/u") === "");
+ok("sanitizeDirPath: traversal rejected", M.sanitizeDirPath("/a/../b", "/home/u") === "");
+ok("sanitizeDirPath: control chars rejected", M.sanitizeDirPath("/tmp/x\x07y", "/home/u") === "");
+ok("sanitizeDirPath: bare tilde rejected", M.sanitizeDirPath("~alone", "/home/u") === "");
+
+let roots = [];
+roots = M.pushLegacyRoot(roots, "/old/default", "/mnt/q");
+ok("pushLegacyRoot: remembers previous root", roots.join() === "/old/default");
+roots = M.pushLegacyRoot(roots, "/mnt/q", "/opt/q");
+ok("pushLegacyRoot: appends most recent last", roots.join() === "/old/default,/mnt/q");
+roots = M.pushLegacyRoot(roots, "/opt/q", "/mnt/q");
+ok("pushLegacyRoot: switching back drops current from history", roots.join() === "/old/default,/opt/q");
+roots = M.pushLegacyRoot(roots, "/mnt/q", "/mnt/q");
+ok("pushLegacyRoot: same-root noop", roots.join() === "/old/default,/opt/q");
+for (let i = 0; i < 12; i++) roots = M.pushLegacyRoot(roots, "/x" + i, "/cur");
+ok("pushLegacyRoot: capped", roots.length <= M.MAX_LEGACY_ROOTS);
+
+const merged = M.mergeLegacyRoots(["/ok/path", "bad", "/a/../b", "", "/ok/path"], "/current", "/home/u");
+ok("mergeLegacyRoots: sanitized deduped current-dropped", merged.length === 1 && merged[0] === "/ok/path");
+ok("mergeLegacyRoots: non-array tolerated", M.mergeLegacyRoots("junk", "/current", "/home/u").length === 0);
+
 console.log("\nmodel.js: " + pass + " passed, " + fail + " failed");
 process.exit(fail === 0 ? 0 : 1);

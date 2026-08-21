@@ -85,9 +85,13 @@ func TestCmdDownloadSingle(t *testing.T) {
 	if string(got) != string(body) {
 		t.Fatalf("content = %q", got)
 	}
-	// Contract: progress_bytes during transfer, progress 1/1 after, complete line.
+	// Contract: progress_bytes during transfer, surah_done, progress 1/1 after,
+	// complete line.
 	if !strings.Contains(out, "progress_bytes") {
 		t.Fatalf("stdout missing progress_bytes: %q", out)
+	}
+	if !strings.Contains(out, "surah_done 1") {
+		t.Fatalf("stdout missing surah_done 1: %q", out)
 	}
 	if !strings.Contains(out, "progress 1/1") {
 		t.Fatalf("stdout missing progress 1/1: %q", out)
@@ -113,6 +117,11 @@ func TestCmdDownloadBulk(t *testing.T) {
 			t.Fatalf("surah %d missing: %v", n, err)
 		}
 	}
+	for _, want := range []string{"surah_done 1", "surah_done 2", "surah_done 3"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout missing %q: %q", want, out)
+		}
+	}
 	if !strings.Contains(out, "progress 3/3") {
 		t.Fatalf("stdout missing progress 3/3: %q", out)
 	}
@@ -132,6 +141,12 @@ func TestCmdDownloadPartialFailure(t *testing.T) {
 	}
 	if !strings.Contains(out, "complete 1 2") {
 		t.Fatalf("stdout missing complete 1 2: %q", out)
+	}
+	if !strings.Contains(out, "surah_done 1") {
+		t.Fatalf("stdout missing surah_done 1: %q", out)
+	}
+	if !strings.Contains(out, "surah_failed 2") || !strings.Contains(out, "surah_failed 3") {
+		t.Fatalf("stdout missing surah_failed lines: %q", out)
 	}
 	if !strings.Contains(errOut, "failed 2") || !strings.Contains(errOut, "failed 3") {
 		t.Fatalf("stderr missing failed lines: %q", errOut)
@@ -156,8 +171,60 @@ func TestCmdDownloadSkipsComplete(t *testing.T) {
 	if strings.Contains(out2, "progress_bytes") {
 		t.Fatalf("complete file must skip transfer: %q", out2)
 	}
+	// The skip still counts as done and must be reported per-surah.
+	if !strings.Contains(out2, "surah_done 1") || !strings.Contains(out2, "progress 1/1") {
+		t.Fatalf("skip must emit surah_done/progress: %q", out2)
+	}
 	if _, err := os.Stat(filepath.Join(root, "ar.alafasy", "1.mp3")); err != nil {
 		t.Fatalf("target: %v", err)
+	}
+}
+
+// TestCmdDownloadDestRoot — --dest-root redirects the landing directory; the
+// default (HOME-derived) root is untouched.
+func TestCmdDownloadDestRoot(t *testing.T) {
+	body := []byte("0123456789abcdef")
+	srv := fakeCDN(t, map[int][]byte{5: body}, "audio/mpeg")
+	defer srv.Close()
+	home := t.TempDir()
+	dest := filepath.Join(home, "media", "quran")
+
+	code, _, errOut, _ := withFakeOriginHome(t, srv, []string{"mp3quran_49", "5", "--dest-root", dest}, home)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr: %s", code, errOut)
+	}
+	got, err := os.ReadFile(filepath.Join(dest, "mp3quran_49", "5.mp3"))
+	if err != nil {
+		t.Fatalf("target: %v", err)
+	}
+	if string(got) != string(body) {
+		t.Fatalf("content = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "state", "omarchy", "quran")); !os.IsNotExist(err) {
+		t.Fatalf("default root must stay untouched: %v", err)
+	}
+
+	// Tilde form expands against HOME.
+	code2, _, errOut2, _ := withFakeOriginHome(t, srv, []string{"mp3quran_49", "5", "--dest-root", "~/tilde-root"}, home)
+	if code2 != 0 {
+		t.Fatalf("tilde exit = %d, stderr: %s", code2, errOut2)
+	}
+	if _, err := os.Stat(filepath.Join(home, "tilde-root", "mp3quran_49", "5.mp3")); err != nil {
+		t.Fatalf("tilde target: %v", err)
+	}
+
+	// Hostile destinations are usage errors before any dial.
+	for _, bad := range []string{"relative/dir", "/a/../b", "/tmp/x\x07y", ""} {
+		args := []string{"mp3quran_49", "5"}
+		if bad != "" {
+			args = append(args, "--dest-root", bad)
+		} else {
+			args = append(args, "--dest-root")
+		}
+		codeBad, _, _, _ := withFakeOriginHome(t, srv, args, home)
+		if codeBad != 2 {
+			t.Fatalf("dest-root %q: exit = %d, want 2", bad, codeBad)
+		}
 	}
 }
 

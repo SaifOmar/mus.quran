@@ -10,7 +10,20 @@ Item {
     property var shell: null
     property var pluginRegistry: null
 
-    readonly property string dataDir: Quickshell.env("HOME") + "/.local/state/omarchy/quran"
+    readonly property string defaultDataDir: Quickshell.env("HOME") + "/.local/state/omarchy/quran"
+    // User-configured download root (persisted; "" = default). Previous roots
+    // are remembered in legacyRoots so already-downloaded files stay playable
+    // without a migration — lookups check the current root first, then each
+    // legacy root.
+    property string downloadDir: ""
+    property var legacyRoots: []
+    property string dataDir: root.downloadDir !== "" ? root.downloadDir : root.defaultDataDir
+    // Read-only local library: an existing folder of audio laid out as
+    // <root>/<reciterId>/<n>.mp3 that is played directly (never copied or
+    // promoted). Persisted; "" = disabled.
+    property string libraryDir: ""
+    property var libraryAvailable: ({})   // "<reciterId>:<n>" -> true, from the last scan
+    property bool libraryScanning: false
     readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/settings/quran.json"
     // mpv IPC socket lives in a private 0700 runtime dir (created on startup),
     // never /tmp. Falls back under the cache root when XDG_RUNTIME_DIR is unset.
@@ -80,6 +93,7 @@ Item {
     property int downloadTotal: 114
     property int downloadRevision: 0
     property string downloadReciter: ""   // reciter currently being downloaded
+    property var downloadFailedSurahs: [] // surah numbers that failed during the active run
     property var lastDownload: null       // { id, surah } for retry after failure
     // The audio engine is the Go quranproxyd daemon + quranctl CLI. Their paths
     // are resolved once at startup (onToolProbe): a committed prebuilt binary in
@@ -105,6 +119,7 @@ Item {
     property int proxySizeBytes: 0      // proxy-owned cache bytes (combined readout)
     property int proxyFilesCount: 0     // proxy-owned cache files (cacheInfo)
     property int proxyRestartCount: 0
+    property bool proxyManualRestart: false  // deliberate stop for a config change
 
     // --- proxy control plane (unix socket) ---
     // The daemon also listens on a unix socket in mpvRuntimeDir (announced as
@@ -438,6 +453,13 @@ Item {
             root.requestLocalValidation(id, n, shouldPlay, resumeMs);
             return;
         }
+        // A surah present in the configured local library plays straight from
+        // disk (the scan already vetted the path shape); never copied or
+        // re-fetched.
+        if (root.libraryHas(id, n)) {
+            root._playLibraryFile(id, n, shouldPlay, resumeMs);
+            return;
+        }
         // Stream through the local range-caching proxy; it validates and promotes
         // the surah to a permanent download on completion (no full-file download
         // needed before playback starts).
@@ -484,6 +506,28 @@ Item {
         }
         root._markFetchAttempt(id, n);
         root.startExplicitDownload(id, n);
+    }
+
+    // Play directly from the configured local library. The path shape was
+    // vetted by the scan (validated identifier + canonical surah number under
+    // the configured root), so this is as safe as any downloaded file.
+    function _playLibraryFile(id, n, autoplay, positionMs) {
+        var path = root.libraryAudioPath(id, n);
+        if (!Model.isSafeReciterArg(id) || !Model.isValidSurahNumber(n) || !root.libraryHas(id, n)) {
+            root.errorMessage = Model.tr(root.language, "playbackFailed");
+            return;
+        }
+        root.reciterId = id;
+        root.surahNumber = n;
+        root.playbackSourceKind = "library";
+        root.playbackSourceTarget = {
+            id: id,
+            n: n
+        };
+        root._setMprisMetadata(id, n);
+        root.resumePending = false;
+        root._mpvLoad("file://" + path, autoplay, positionMs);
+        root.saveState();
     }
 
     function _playNow(id, n) {
@@ -534,10 +578,11 @@ Item {
         }
         localValidationProc.mode = "playback";
         localValidationProc.target = target;
-        // Deep media validation (size, MIME type, ffprobe) via the quranctl
-        // companion binary — fails closed when file(1) is missing. A non-zero
-        // exit means the local file is unusable.
-        localValidationProc.command = [root.quranctlBinary, "validate", root.localAudioPath(id, n)];
+        // Deep media validation (size, MIME type, ffprobe) of the first root
+        // that actually holds the file — see _audioResolveCommand. Exit 0 =
+        // valid (resolvedPath holds the file), 1 = missing everywhere,
+        // 3 = found but unusable media.
+        localValidationProc.command = root._audioResolveCommand(id, n, true);
         localValidationProc.running = true;
     }
 
@@ -575,23 +620,28 @@ Item {
         }
         localValidationProc.mode = mode;
         localValidationProc.target = target;
-        localValidationProc.command = ["test", "-s", root.localAudioPath(target.id, target.n)];
+        // Shallow existence probe across the current + legacy roots so a
+        // folder move doesn't invalidate flags for files left behind.
+        localValidationProc.command = root._audioResolveCommand(target.id, target.n, false);
         localValidationProc.running = true;
     }
 
     function onLocalValidationExited(exitCode) {
         var target = localValidationProc.target;
         var mode = localValidationProc.mode;
+        var resolved = localValidationProc.resolvedPath;
         localValidationProc.target = null;
         localValidationProc.mode = "";
+        localValidationProc.resolvedPath = "";
         if (target && exitCode !== 0) {
             root.invalidateSurahDownload(target.id, target.n);
             if (mode === "playback") {
                 // Corrupt downloaded file: delete it from disk (fail-closed whitelist
                 // inside quranctl) and refuse re-fetches for the cooldown window so a
                 // bad CDN file can't trigger a re-download loop. A retry after the
-                // window re-fetches clean.
-                localRemoveProc.command = [root.quranctlBinary, "remove", "--state-dir", root.dataDir, target.id, String(target.n)];
+                // window re-fetches clean. The remove targets the root the bad file
+                // was actually found in.
+                localRemoveProc.command = [root.quranctlBinary, "remove", "--state-dir", root.audioRootOf(resolved, target.id, target.n), target.id, String(target.n)];
                 localRemoveProc.running = true;
                 root._markFetchAttempt(target.id, target.n);
                 root.errorMessage = Model.tr(root.language, "playbackFailed");
@@ -601,12 +651,64 @@ Item {
             root.playbackSourceTarget = target;
             root.reciterId = target.id;
             root.surahNumber = target.n;
-            root._mpvLoad(Model.localAudioUrl(root.dataDir, target.id, target.n), target.autoplay, target.positionMs);
+            // resolved is the exact validated path from the resolver command.
+            root._mpvLoad("file://" + resolved, target.autoplay, target.positionMs);
             root._setMprisMetadata(target.id, target.n);
             root.resumePending = false;
             root.saveState();
         }
         pumpLocalValidation();
+    }
+
+    // --- multi-root audio path resolution --------------------------------------
+
+    // Single-quote a string for safe interpolation into a `bash -c` script.
+    // Candidates are validated paths (no control chars, no ".."), but may
+    // contain spaces or quotes of their own.
+    function _shellQuote(s) {
+        return "'" + String(s).replace(/'/g, "'\\''") + "'";
+    }
+
+    // All roots that may hold downloaded files: the active download dir first,
+    // then legacy roots (most recent first).
+    function _audioRoots() {
+        var roots = [root.dataDir];
+        var legacy = Array.isArray(root.legacyRoots) ? root.legacyRoots : [];
+        for (var i = legacy.length - 1; i >= 0; i--) {
+            if (legacy[i] && roots.indexOf(legacy[i]) === -1)
+                roots.push(legacy[i]);
+        }
+        return roots;
+    }
+
+    // Command that finds the first root holding <id>/<n>.mp3 and, in deep
+    // mode, media-validates it with quranctl before reporting success.
+    // Exit codes: 0 = found (stdout carries the absolute path), 1 = missing,
+    // 3 = present but invalid media (deep mode only).
+    function _audioResolveCommand(id, n, deep) {
+        if (!Model.isSafeReciterArg(id) || !Model.isValidSurahNumber(n))
+            return ["false"];
+        var suffix = "/" + id + "/" + n + ".mp3";
+        var quoted = [];
+        var roots = root._audioRoots();
+        for (var i = 0; i < roots.length; i++)
+            quoted.push(root._shellQuote(roots[i] + suffix));
+        var script = 'found=""; for p in ' + quoted.join(" ") + '; do if [ -s "$p" ]; then found="$p"; break; fi; done; [ -n "$found" ] || exit 1;';
+        if (!deep)
+            return ["bash", "-c", script + ' printf %s "$found"'];
+        if (!root.quranctlBinary)
+            return ["false"];
+        return ["bash", "-c", script + " " + root._shellQuote(root.quranctlBinary) + " validate \"$found\" || exit 3; printf %s \"$found\""];
+    }
+
+    // Root directory of a resolved audio path (inverse of the candidate
+    // construction above); falls back to the active dataDir when the shape
+    // doesn't match.
+    function audioRootOf(resolved, id, n) {
+        var suffix = "/" + id + "/" + n + ".mp3";
+        if (typeof resolved === "string" && resolved.length > suffix.length && resolved.substring(resolved.length - suffix.length) === suffix)
+            return resolved.substring(0, resolved.length - suffix.length);
+        return root.dataDir;
     }
 
     // Set mpv's force-media-title and artist so mpv-mpris surfaces surah/reciter
@@ -874,6 +976,7 @@ Item {
         root.downloadDone = 0;
         root.downloadTotal = 1;
         root.errorMessage = "";
+        root.downloadFailedSurahs = [];
         downloadProc.targetReciter = id;
         downloadProc.targetSurah = n;
         // Persist the active download so a shell restart resumes it.
@@ -891,6 +994,10 @@ Item {
         if (reciter && reciter.server) {
             cmd.push("--server");
             cmd.push(reciter.server);
+        }
+        if (root.dataDir !== root.defaultDataDir) {
+            cmd.push("--dest-root");
+            cmd.push(root.dataDir);
         }
         downloadProc.command = cmd;
         downloadProc.running = true;
@@ -929,6 +1036,7 @@ Item {
         root.downloadDone = 0;
         root.downloadTotal = work.length;
         root.errorMessage = "";
+        root.downloadFailedSurahs = [];
         root.startMushafDownload(id, work);
     }
     // function downloadMushaf(id) {
@@ -984,6 +1092,7 @@ Item {
             id: id,
             surah: 0
         };
+        root.downloadFailedSurahs = [];
         downloadProc.targetReciter = id;
         downloadProc.targetSurah = 0;
         // Persist the active mushaf download (with the exact remaining list) so a
@@ -999,6 +1108,10 @@ Item {
         if (reciter && reciter.server) {
             cmd.push("--server");
             cmd.push(reciter.server);
+        }
+        if (root.dataDir !== root.defaultDataDir) {
+            cmd.push("--dest-root");
+            cmd.push(root.dataDir);
         }
         downloadProc.command = cmd;
         downloadProc.running = true;
@@ -1041,12 +1154,34 @@ Item {
             root.downloadTotal = 100;
             return;
         }
+        // Per-surah completion from the running quranctl: mark immediately so
+        // the surah list flips icons live instead of only at process exit.
+        // (Idempotent — onExited re-marks the single-surah case.)
+        var done = String(line).match(/^surah_done\s+(\d+)\s*$/);
+        if (done) {
+            var dsn = parseInt(done[1], 10);
+            if (downloadProc.targetReciter && Model.isValidSurahNumber(dsn))
+                root.markSurahDownloaded(downloadProc.targetReciter, dsn);
+            return;
+        }
+        var failed = String(line).match(/^surah_failed\s+(\d+)\s*$/);
+        if (failed) {
+            var fsn = parseInt(failed[1], 10);
+            if (Model.isValidSurahNumber(fsn) && root.downloadFailedSurahs.indexOf(fsn) === -1)
+                root.downloadFailedSurahs = root.downloadFailedSurahs.concat([fsn]);
+            return;
+        }
         var m = String(line).match(/^progress\s+(\d+)\/(\d+)\s*$/);
         if (!m)
             return;
         if (downloadProc.targetSurah === 0) {
-            root.downloadDone = Math.min(114, parseInt(m[1]));
-            root.downloadTotal = 114;
+            // The tally reflects what this run was launched with (only the
+            // missing surahs) — never re-inflated to 114 mid-run.
+            var total = parseInt(m[2], 10);
+            if (total >= 1 && total <= 114) {
+                root.downloadTotal = total;
+                root.downloadDone = Math.min(total, parseInt(m[1]));
+            }
         } else {
             root.downloadDone = parseInt(m[1]);
             root.downloadTotal = parseInt(m[2]);
@@ -1084,6 +1219,207 @@ Item {
         });
     }
 
+    // --- storage roots ---------------------------------------------------------
+
+    // Change the download folder. Files are never moved: the previous root is
+    // remembered in legacyRoots so its downloads stay playable, new downloads
+    // land in the new root, and the proxy daemon restarts so promotions follow.
+    // Returns null on success or a user-facing error string.
+    function setDownloadDir(raw) {
+        var clean = Model.sanitizeDirPath(raw, Quickshell.env("HOME"));
+        var hadInput = String(raw === undefined || raw === null ? "" : raw).trim() !== "";
+        if (hadInput && clean === "")
+            return root.trStr("invalidPath");
+        if (clean === root.downloadDir)
+            return null;
+        var previous = root.dataDir;
+        root.downloadDir = clean;
+        if (previous !== root.dataDir)
+            root.legacyRoots = Model.pushLegacyRoot(root.legacyRoots, previous, root.dataDir);
+        root.saveState();
+        root.downloadRevision++;
+        root.restartProxyForConfig();
+        return null;
+    }
+
+    function trStr(key) {
+        return Model.tr(root.language, key);
+    }
+
+    // Settings-UI entry point: validate the shape synchronously (inline error),
+    // then prove writability with a tiny probe process before committing.
+    property string dirApplyTarget: ""
+
+    function applyDownloadDir(raw) {
+        var clean = Model.sanitizeDirPath(raw, Quickshell.env("HOME"));
+        var hadInput = String(raw === undefined || raw === null ? "" : raw).trim() !== "";
+        if (hadInput && clean === "")
+            return root.trStr("invalidPath");
+        if (clean === root.downloadDir)
+            return "";
+        dirApplyTarget = clean;
+        if (clean === "") {
+            // Reset to the default root — nothing to probe.
+            var err = root.setDownloadDir("");
+            return err || "";
+        }
+        var q = root._shellQuote(clean);
+        dirProbeProc.command = ["bash", "-c", "mkdir -p -- " + q + " 2>/dev/null && [ -w " + q + " ] && touch " + q + "/.quran-probe 2>/dev/null && rm -f " + q + "/.quran-probe"];
+        dirProbeProc.running = true;
+        return "";
+    }
+
+    Process {
+        id: dirProbeProc
+        running: false
+        onExited: function (exitCode) {
+            if (!root.dirApplyTarget)
+                return;
+            var target = root.dirApplyTarget;
+            root.dirApplyTarget = "";
+            if (exitCode !== 0) {
+                root.settingsError = root.trStr("pathNotWritable");
+                return;
+            }
+            var err = root.setDownloadDir(target);
+            if (err)
+                root.settingsError = err;
+        }
+    }
+
+    // Transient inline error for the settings panel (path validation etc.);
+    // separate from playback errorMessage so it never masquerades as one.
+    property string settingsError: ""
+
+    // --- local library ----------------------------------------------------------
+
+    function libraryHas(id, n) {
+        return root.libraryDir !== "" && root.libraryAvailable[id + ":" + n] === true;
+    }
+
+    function libraryAudioPath(id, n) {
+        return root.libraryDir + "/" + id + "/" + n + ".mp3";
+    }
+
+    function libraryCount(id) {
+        var count = 0;
+        for (var i = 1; i <= 114; i++) {
+            if (root.libraryAvailable[id + ":" + i] === true)
+                count++;
+        }
+        return count;
+    }
+
+    // One bounded scan of the library root. The result map only accepts
+    // <safeId>/<canonical 1..114>.mp3 entries, so a stray file can't inject a
+    // hostile path into playback.
+    function rescanLibrary() {
+        if (root.shuttingDown || libraryScanProc.running)
+            return;
+        if (root.libraryDir === "") {
+            root.libraryAvailable = {};
+            return;
+        }
+        root.libraryScanning = true;
+        libraryScanProc.command = ["bash", "-c", "find " + root._shellQuote(root.libraryDir) + " -mindepth 2 -maxdepth 2 -type f -name '*.mp3'"];
+        libraryScanProc.running = true;
+    }
+
+    function onLibraryScanFinished(text, exitCode) {
+        root.libraryScanning = false;
+        if (exitCode !== 0) {
+            root.settingsError = root.trStr("libraryUnreadable");
+            return;
+        }
+        var map = {};
+        var prefix = root.libraryDir + "/";
+        var lines = String(text || "").split("\n");
+        for (var i = 0; i < lines.length; i++) {
+            if (lines[i].indexOf(prefix) !== 0)
+                continue;
+            var rel = lines[i].substring(prefix.length);
+            var sep = rel.indexOf("/");
+            if (sep <= 0)
+                continue;
+            var id = rel.substring(0, sep);
+            var fname = rel.substring(sep + 1);
+            if (fname.length < 5 || fname.indexOf(".mp3") !== fname.length - 4)
+                continue;
+            var numStr = fname.substring(0, fname.length - 4);
+            if (!/^[0-9]+$/.test(numStr) || (numStr.length > 1 && numStr.charAt(0) === "0"))
+                continue;
+            var n = parseInt(numStr, 10);
+            if (!Model.isValidSurahNumber(n) || !Model.isSafeIdentifier(id))
+                continue;
+            map[id + ":" + n] = true;
+        }
+        root.libraryAvailable = map;
+        root.downloadRevision++;
+    }
+
+    // Settings entry point for the library folder: validate shape inline, then
+    // probe readability and scan in one process before committing.
+    property string libraryApplyTarget: ""
+
+    function applyLibraryDir(raw) {
+        var clean = Model.sanitizeDirPath(raw, Quickshell.env("HOME"));
+        var hadInput = String(raw === undefined || raw === null ? "" : raw).trim() !== "";
+        if (hadInput && clean === "")
+            return root.trStr("invalidPath");
+        if (clean === root.libraryDir)
+            return "";
+        libraryApplyTarget = clean;
+        if (clean === "") {
+            root.libraryDir = "";
+            root.libraryAvailable = {};
+            root.saveState();
+            root.downloadRevision++;
+            return "";
+        }
+        var q = root._shellQuote(clean);
+        libraryProbeProc.command = ["bash", "-c", "[ -d " + q + " ] && [ -r " + q + " ] && find " + q + " -mindepth 2 -maxdepth 2 -type f -name '*.mp3'"];
+        libraryProbeProc.running = true;
+        return "";
+    }
+
+    Process {
+        id: libraryProbeProc
+        running: false
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: root._libraryProbeOutput = text
+        }
+        onExited: function (exitCode) {
+            if (!root.libraryApplyTarget)
+                return;
+            var target = root.libraryApplyTarget;
+            root.libraryApplyTarget = "";
+            if (exitCode !== 0) {
+                root.settingsError = root.trStr("libraryUnreadable");
+                return;
+            }
+            root.libraryDir = target;
+            root.saveState();
+            root.onLibraryScanFinished(root._libraryProbeOutput, 0);
+        }
+    }
+    property string _libraryProbeOutput: ""
+
+    Process {
+        id: libraryScanProc
+        running: false
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: root._libraryScanOutput = text
+        }
+        onExited: function (exitCode) {
+            var text = root._libraryScanOutput;
+            root._libraryScanOutput = "";
+            root.onLibraryScanFinished(text, exitCode);
+        }
+    }
+    property string _libraryScanOutput: ""
+
     // One-shot HTTP request over the daemon's control-plane unix socket. The
     // daemon's responses are single-line JSON, so the body is the last parsed
     // line of the response; headers are discarded. Failures are silent (the
@@ -1098,6 +1434,19 @@ Item {
         };
         proxyHttpSocket.path = root.proxySocketPath;
         proxyHttpSocket.connected = true;
+    }
+
+    // Restart the daemon because configuration changed (download folder). Any
+    // in-flight stream dies — acceptable for a deliberate settings change.
+    function restartProxyForConfig() {
+        if (root.shuttingDown || !root.proxyBinary)
+            return;
+        root.proxyManualRestart = true;
+        root.proxyRestartCount = 0;
+        if (proxyProc.running)
+            proxyProc.running = false;
+        else
+            proxyRestartTimer.restart();
     }
 
     // --- quranproxyd lifecycle + events ---------------------------------------
@@ -1302,7 +1651,10 @@ Item {
             catalogFetchedAt: root.catalogFetchedAt,
             reciterStatus: root.reciterStatus,
             downloadedSurahs: root.downloadedSurahs,
-            downloadIntent: root.downloadIntent
+            downloadIntent: root.downloadIntent,
+            downloadDir: root.downloadDir,
+            legacyRoots: root.legacyRoots,
+            libraryDir: root.libraryDir
         };
         stateFile.setText(JSON.stringify(state));
     }
@@ -1353,6 +1705,20 @@ Item {
         }
         if (typeof data.catalogFetchedAt === "number" && isFinite(data.catalogFetchedAt) && data.catalogFetchedAt >= 0) {
             root.catalogFetchedAt = data.catalogFetchedAt;
+        }
+        // Configured download root + remembered previous roots. Each entry is
+        // re-validated with the same rules quranctl applies to --dest-root; a
+        // hostile state file falls back to the default root.
+        if (typeof data.downloadDir === "string")
+            root.downloadDir = data.downloadDir === "" ? "" : Model.sanitizeDirPath(data.downloadDir, Quickshell.env("HOME"));
+        if (Array.isArray(data.legacyRoots))
+            root.legacyRoots = Model.mergeLegacyRoots(data.legacyRoots, root.dataDir, Quickshell.env("HOME"));
+        if (typeof data.libraryDir === "string") {
+            var libClean = data.libraryDir === "" ? "" : Model.sanitizeDirPath(data.libraryDir, Quickshell.env("HOME"));
+            if (libClean !== root.libraryDir) {
+                root.libraryDir = libClean;
+                root.rescanLibrary();
+            }
         }
         if (data.reciterStatus && typeof data.reciterStatus === "object") {
             // Keys must be valid identifiers, values from the known set; junk is
@@ -1566,6 +1932,11 @@ Item {
         id: localValidationProc
         property var target: null
         property string mode: ""
+        property string resolvedPath: ""
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: localValidationProc.resolvedPath = text.trim()
+        }
         onExited: function (exitCode) {
             root.onLocalValidationExited(exitCode);
         }
@@ -1585,7 +1956,7 @@ Item {
     // is missing, playback continues without system media control.
     Process {
         id: mprisFindProc
-        command: ["bash", "-c", 'for p in /usr/lib/mpv/mpv-mpris/mpv_mpris.so /usr/lib64/mpv/mpv-mpris/mpv_mpris.so /usr/share/mpv/scripts/mpv-mpris/mpv_mpris.so "$HOME/.config/mpv/scripts/mpv-mpris/mpv_mpris.so" "$HOME/.local/lib/mpv/mpv-mpris/mpv_mpris.so"; do [ -f "$p" ] && { echo "$p"; exit 0; }; done; exit 1']
+        command: ["bash", "-c", 'for p in /usr/lib/mpv/mpv-mpris/mpv_mpris.so /usr/lib64/mpv/mpv-mpris/mpv_mpris.so /usr/share/mpv/scripts/mpv-mpris/mpv_mpris.so /usr/lib/mpv-mpris/mpris.so /etc/mpv/scripts/mpris.so "$HOME/.config/mpv/scripts/mpv-mpris/mpv_mpris.so" "$HOME/.local/lib/mpv/mpv-mpris/mpv_mpris.so"; do [ -f "$p" ] && { echo "$p"; exit 0; }; done; exit 1']
         stdout: StdioCollector {
             waitForEnd: true
             onStreamFinished: root.mpvMprisScript = text.trim()
@@ -1823,6 +2194,13 @@ Item {
             root.proxyReady = false;
             root.proxyPort = 0;
             root.proxyToken = "";
+            if (root.proxyManualRestart) {
+                // Deliberate stop (config change): relaunch without burning
+                // the crash-restart budget.
+                root.proxyManualRestart = false;
+                proxyRestartTimer.restart();
+                return;
+            }
             if (!root.shuttingDown && root.proxyRestartCount < 5) {
                 root.proxyRestartCount++;
                 proxyRestartTimer.restart();

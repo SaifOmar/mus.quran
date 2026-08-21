@@ -2,20 +2,23 @@
 //
 // Usage:
 //
-//	quranctl download <reciter> <n> [--server URL]
-//	quranctl download <reciter> --only a,b,c [--server URL]
+//	quranctl download <reciter> <n> [--server URL] [--dest-root DIR]
+//	quranctl download <reciter> --only a,b,c [--server URL] [--dest-root DIR]
 //
-// Files land at ~/.local/state/omarchy/quran/<reciter>/<n>.mp3 (permanent
-// downloads only — the cache-root/budget modes of download.sh died with the
-// legacy cache). The origin URL is built and validated in-process via
-// urlsafety.AudioURL — the caller-supplied --server is convenience only and is
-// NEVER trusted; an invalid URL fails the surah before any dial.
+// The origin URL is built and validated in-process via urlsafety.AudioURL —
+// the caller-supplied --server is convenience only and is NEVER trusted; an
+// invalid URL fails the surah before any dial.
 //
-// Stdout contract (unchanged from download.sh, consumed by Service.qml):
-// `progress_bytes P/100` during a transfer, `progress DONE/TOTAL` after each
-// completed surah, `complete DONE FAILED` at the end. `failed <n>` goes to
+// Stdout contract (consumed by Service.qml):
+// `progress_bytes P/100` during a transfer, `surah_done <n>` after each surah
+// is present on disk (fresh fetch or already-complete skip), `surah_failed <n>`
+// after each failed one, `progress DONE/TOTAL` as a running tally, and
+// `complete DONE FAILED` at the end. `failed <n>: reason` detail goes to
 // stderr. Exit 0 = all surahs present, 1 = at least one failed, 2 = usage,
 // 130 = interrupted.
+//
+// Files land at <dest-root>/<reciter>/<n>.mp3 where <dest-root> is --dest-root
+// when given, else ~/.local/state/omarchy/quran.
 package main
 
 import (
@@ -25,7 +28,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -61,17 +63,24 @@ var newDownloadClient = func() *http.Client {
 }
 
 func cmdDownloadIO(args []string, stdout, stderr io.Writer) int {
-	reciter, surahs, server, err := parseDownloadArgs(args, stderr)
+	reciter, surahs, server, destRoot, err := parseDownloadArgs(args, stderr)
 	if err != nil {
 		return 2
 	}
 
-	home := os.Getenv("HOME")
-	if home == "" {
-		fmt.Fprintln(stderr, "quranctl: HOME is not set")
+	stateRoot := defaultStateDir()
+	if destRoot != nil {
+		clean, ok := safeDirPath(*destRoot)
+		if !ok {
+			fmt.Fprintf(stderr, "quranctl: invalid --dest-root path\n")
+			return 2
+		}
+		stateRoot = clean
+	}
+	if stateRoot == "" {
+		fmt.Fprintln(stderr, "quranctl: no destination root available (set HOME or --dest-root)")
 		return 2
 	}
-	stateRoot := filepath.Join(home, ".local", "state", "omarchy", "quran")
 
 	client := newDownloadClient()
 	buildURL := buildOriginURL(reciter, server)
@@ -105,6 +114,7 @@ func cmdDownloadIO(args []string, stdout, stderr io.Writer) int {
 		})
 		if err == fetch.ErrComplete {
 			done++
+			fmt.Fprintf(stdout, "surah_done %d\n", n)
 			fmt.Fprintf(stdout, "progress %d/%d\n", done, total)
 			continue
 		}
@@ -115,10 +125,12 @@ func cmdDownloadIO(args []string, stdout, stderr io.Writer) int {
 				return 130
 			}
 			failed++
+			fmt.Fprintf(stdout, "surah_failed %d\n", n)
 			fmt.Fprintf(stderr, "failed %d: %v\n", n, err)
 			continue
 		}
 		done++
+		fmt.Fprintf(stdout, "surah_done %d\n", n)
 		fmt.Fprintf(stdout, "progress %d/%d\n", done, total)
 	}
 
@@ -130,29 +142,38 @@ func cmdDownloadIO(args []string, stdout, stderr io.Writer) int {
 }
 
 // parseDownloadArgs validates the command line and returns the reciter, the
-// ordered surah work set, and the optional --server prefix. Usage errors are
-// printed to stderr and returned as err.
-func parseDownloadArgs(args []string, stderr io.Writer) (string, []int, *string, error) {
+// ordered surah work set, the optional --server prefix, and the optional
+// --dest-root override. Usage errors are printed to stderr and returned as err.
+func parseDownloadArgs(args []string, stderr io.Writer) (string, []int, *string, *string, error) {
 	var positionals []string
 	var only string
 	var server *string
+	var destRoot *string
 	i := 0
 	for i < len(args) {
 		switch args[i] {
 		case "--only":
 			if i+1 >= len(args) {
-				fmt.Fprintln(stderr, "usage: quranctl download <reciter> <n>|--only a,b,c [--server URL]")
-				return "", nil, nil, fmt.Errorf("missing --only value")
+				fmt.Fprintln(stderr, "usage: quranctl download <reciter> <n>|--only a,b,c [--server URL] [--dest-root DIR]")
+				return "", nil, nil, nil, fmt.Errorf("missing --only value")
 			}
 			only = args[i+1]
 			i += 2
 		case "--server":
 			if i+1 >= len(args) {
-				fmt.Fprintln(stderr, "usage: quranctl download <reciter> <n>|--only a,b,c [--server URL]")
-				return "", nil, nil, fmt.Errorf("missing --server value")
+				fmt.Fprintln(stderr, "usage: quranctl download <reciter> <n>|--only a,b,c [--server URL] [--dest-root DIR]")
+				return "", nil, nil, nil, fmt.Errorf("missing --server value")
 			}
 			v := args[i+1]
 			server = &v
+			i += 2
+		case "--dest-root":
+			if i+1 >= len(args) {
+				fmt.Fprintln(stderr, "usage: quranctl download <reciter> <n>|--only a,b,c [--server URL] [--dest-root DIR]")
+				return "", nil, nil, nil, fmt.Errorf("missing --dest-root value")
+			}
+			v := args[i+1]
+			destRoot = &v
 			i += 2
 		default:
 			positionals = append(positionals, args[i])
@@ -160,17 +181,17 @@ func parseDownloadArgs(args []string, stderr io.Writer) (string, []int, *string,
 		}
 	}
 	if len(positionals) == 0 {
-		fmt.Fprintln(stderr, "usage: quranctl download <reciter> <n>|--only a,b,c [--server URL]")
-		return "", nil, nil, fmt.Errorf("missing reciter")
+		fmt.Fprintln(stderr, "usage: quranctl download <reciter> <n>|--only a,b,c [--server URL] [--dest-root DIR]")
+		return "", nil, nil, nil, fmt.Errorf("missing reciter")
 	}
 	reciter := positionals[0]
 	if !urlsafety.IsSafeIdentifier(reciter) {
 		fmt.Fprintln(stderr, "quranctl: invalid reciter identifier")
-		return "", nil, nil, fmt.Errorf("invalid reciter")
+		return "", nil, nil, nil, fmt.Errorf("invalid reciter")
 	}
 	if server != nil && urlsafety.SanitizeServer(*server) == "" {
 		fmt.Fprintln(stderr, "quranctl: invalid --server URL")
-		return "", nil, nil, fmt.Errorf("invalid server")
+		return "", nil, nil, nil, fmt.Errorf("invalid server")
 	}
 
 	var surahs []int
@@ -184,24 +205,24 @@ func parseDownloadArgs(args []string, stderr io.Writer) (string, []int, *string,
 			n, err := strconv.Atoi(raw)
 			if err != nil || n < 1 || n > 114 {
 				fmt.Fprintln(stderr, "quranctl: invalid surah number:", raw)
-				return "", nil, nil, fmt.Errorf("invalid surah")
+				return "", nil, nil, nil, fmt.Errorf("invalid surah")
 			}
 			surahs = append(surahs, n)
 		}
 		if len(surahs) == 0 {
-			fmt.Fprintln(stderr, "quranctl: no surahs in --only list")
-			return "", nil, nil, fmt.Errorf("empty only list")
+			fmt.Fprintln(stderr, "usage: quranctl download <reciter> <n>|--only a,b,c [--server URL] [--dest-root DIR]")
+			return "", nil, nil, nil, fmt.Errorf("empty only list")
 		}
 	} else if len(positionals) >= 2 {
 		n, err := strconv.Atoi(positionals[1])
 		if err != nil || n < 1 || n > 114 {
 			fmt.Fprintln(stderr, "quranctl: invalid surah number:", positionals[1])
-			return "", nil, nil, fmt.Errorf("invalid surah")
+			return "", nil, nil, nil, fmt.Errorf("invalid surah")
 		}
 		surahs = []int{n}
 	} else {
-		fmt.Fprintln(stderr, "usage: quranctl download <reciter> <n>|--only a,b,c [--server URL]")
-		return "", nil, nil, fmt.Errorf("missing surah")
+		fmt.Fprintln(stderr, "usage: quranctl download <reciter> <n>|--only a,b,c [--server URL] [--dest-root DIR]")
+		return "", nil, nil, nil, fmt.Errorf("missing surah")
 	}
-	return reciter, surahs, server, nil
+	return reciter, surahs, server, destRoot, nil
 }
