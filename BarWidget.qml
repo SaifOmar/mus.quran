@@ -56,6 +56,15 @@ BarWidget {
     readonly property var filteredSurahs: Model.filterSurahs(quranService ? quranService.surahs : [], root.surahQuery)
     readonly property var filteredReciters: Model.filterReciters(quranService ? quranService.reciters : [], root.reciterQuery)
 
+    // Options for the flat-library reciter binding: None + the catalog.
+    readonly property var libraryReciterOptions: {
+        var opts = [{ value: "", label: "—" }];
+        var list = quranService ? quranService.reciters : [];
+        for (var i = 0; i < list.length; i++)
+            opts.push({ value: list[i].identifier, label: Model.reciterDisplayLabel(list[i], root.lang()) });
+        return opts;
+    }
+
     // Filtering is cheap, but delegate creation is not. Coalesce rapid
     // keystrokes so the virtualized list only receives settled queries.
     Timer {
@@ -1088,6 +1097,21 @@ BarWidget {
                         font.pixelSize: Style.font.caption
                         elide: Text.ElideRight
                         width: parent.width
+                    }
+
+                    // Reciter that flat (depth-1) library files belong to.
+                    SearchableDropdown {
+                        id: libraryReciterDropdown
+                        width: parent.width
+                        value: quranService ? quranService.libraryReciter : ""
+                        options: root.libraryReciterOptions
+                        showLabel: false
+                        foreground: root.fg
+                        placeholderText: root.tr("libraryReciter")
+                        onChanged: function (v) {
+                            if (quranService)
+                                quranService.setLibraryReciter(v);
+                        }
                     }
 
                     Row {

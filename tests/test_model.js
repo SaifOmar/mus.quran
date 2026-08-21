@@ -301,5 +301,32 @@ const merged = M.mergeLegacyRoots(["/ok/path", "bad", "/a/../b", "", "/ok/path"]
 ok("mergeLegacyRoots: sanitized deduped current-dropped", merged.length === 1 && merged[0] === "/ok/path");
 ok("mergeLegacyRoots: non-array tolerated", M.mergeLegacyRoots("junk", "/current", "/home/u").length === 0);
 
+// ---------------------------------------------------------------------------
+// library scan parsing (flat + nested layouts)
+// ---------------------------------------------------------------------------
+const LIB = "/home/u/lib";
+const flat = [
+  LIB + "/1.mp3", LIB + "/2.mp3", LIB + "/114.mp3",
+  LIB + "/007.mp3",        // leading zero -> rejected
+  LIB + "/115.mp3",        // out of range -> rejected
+  LIB + "/notes.txt",      // not mp3 -> rejected
+];
+let m1 = M.parseLibraryEntries(flat, LIB, "ar.alafasy");
+ok("parseLibraryEntries: flat bound to reciter", m1["ar.alafasy:1"] === true && m1["ar.alafasy:2"] === true && m1["ar.alafasy:114"] === true);
+ok("parseLibraryEntries: flat count exact", Object.keys(m1).length === 3);
+ok("parseLibraryEntries: no reciter skips flat", Object.keys(M.parseLibraryEntries(flat, LIB, "")).length === 0);
+
+const nested = [LIB + "/mp3quran_49/3.mp3", LIB + "/ar.alafasy/7.mp3"];
+let m2 = M.parseLibraryEntries(nested, LIB, "");
+ok("parseLibraryEntries: nested attributed to folder id", m2["mp3quran_49:3"] === true && m2["ar.alafasy:7"] === true);
+
+const mixed = [...flat, ...nested, LIB + "/../outside.mp3", "relative/x.mp3", LIB + "/ar.alafasy/1.mp3"];
+let m3 = M.parseLibraryEntries(mixed, LIB, "ar.alafasy");
+ok("parseLibraryEntries: mixed layouts merged", m3["ar.alafasy:1"] === true && m3["mp3quran_49:3"] === true && m3["ar.alafasy:7"] === true);
+ok("parseLibraryEntries: outside/root-relative lines ignored", m3["../outside:undefined"] !== true);
+ok("parseLibraryEntries: bad id folder rejected", M.parseLibraryEntries([LIB + "/../evil/5.mp3"], LIB, "x")["..evil:5"] !== true);
+ok("parseLibraryEntries: non-array input as string", Object.keys(M.parseLibraryEntries(LIB + "/9.mp3\n", LIB, "r")).length === 1);
+ok("parseLibraryEntries: trailing slash root ok", Object.keys(M.parseLibraryEntries([LIB + "/4.mp3"], LIB + "/", "r")).length === 1);
+
 console.log("\nmodel.js: " + pass + " passed, " + fail + " failed");
 process.exit(fail === 0 ? 0 : 1);

@@ -18,10 +18,12 @@ Item {
     property string downloadDir: ""
     property var legacyRoots: []
     property string dataDir: root.downloadDir !== "" ? root.downloadDir : root.defaultDataDir
-    // Read-only local library: an existing folder of audio laid out as
-    // <root>/<reciterId>/<n>.mp3 that is played directly (never copied or
-    // promoted). Persisted; "" = disabled.
+    // Read-only local library: an existing folder of audio that is played
+    // directly (never copied or promoted). Two layouts are supported:
+    // <root>/<reciterId>/<n>.mp3, or flat <root>/<n>.mp3 attributed to the
+    // configured libraryReciter. Persisted; "" = disabled.
     property string libraryDir: ""
+    property string libraryReciter: ""    // reciter for flat (depth-1) library files
     property var libraryAvailable: ({})   // "<reciterId>:<n>" -> true, from the last scan
     property bool libraryScanning: false
     readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/settings/quran.json"
@@ -1311,8 +1313,9 @@ Item {
     }
 
     // One bounded scan of the library root. The result map only accepts
-    // <safeId>/<canonical 1..114>.mp3 entries, so a stray file can't inject a
-    // hostile path into playback.
+    // <safeId>/<canonical 1..114>.mp3 entries (plus flat <n>.mp3 bound to
+    // libraryReciter), so a stray file can't inject a hostile path into
+    // playback.
     function rescanLibrary() {
         if (root.shuttingDown || libraryScanProc.running)
             return;
@@ -1321,7 +1324,7 @@ Item {
             return;
         }
         root.libraryScanning = true;
-        libraryScanProc.command = ["bash", "-c", "find " + root._shellQuote(root.libraryDir) + " -mindepth 2 -maxdepth 2 -type f -name '*.mp3'"];
+        libraryScanProc.command = ["bash", "-c", "find " + root._shellQuote(root.libraryDir) + " -mindepth 1 -maxdepth 2 -type f -name '*.mp3'"];
         libraryScanProc.running = true;
     }
 
@@ -1331,30 +1334,18 @@ Item {
             root.settingsError = root.trStr("libraryUnreadable");
             return;
         }
-        var map = {};
-        var prefix = root.libraryDir + "/";
-        var lines = String(text || "").split("\n");
-        for (var i = 0; i < lines.length; i++) {
-            if (lines[i].indexOf(prefix) !== 0)
-                continue;
-            var rel = lines[i].substring(prefix.length);
-            var sep = rel.indexOf("/");
-            if (sep <= 0)
-                continue;
-            var id = rel.substring(0, sep);
-            var fname = rel.substring(sep + 1);
-            if (fname.length < 5 || fname.indexOf(".mp3") !== fname.length - 4)
-                continue;
-            var numStr = fname.substring(0, fname.length - 4);
-            if (!/^[0-9]+$/.test(numStr) || (numStr.length > 1 && numStr.charAt(0) === "0"))
-                continue;
-            var n = parseInt(numStr, 10);
-            if (!Model.isValidSurahNumber(n) || !Model.isSafeIdentifier(id))
-                continue;
-            map[id + ":" + n] = true;
-        }
-        root.libraryAvailable = map;
+        root.libraryAvailable = Model.parseLibraryEntries(String(text || "").split("\n"), root.libraryDir, root.libraryReciter);
         root.downloadRevision++;
+    }
+
+    // Bind flat (depth-1) library files to a reciter and rescan.
+    function setLibraryReciter(id) {
+        var clean = Model.isSafeReciterArg(String(id || "")) ? String(id) : "";
+        if (clean === root.libraryReciter)
+            return;
+        root.libraryReciter = clean;
+        root.saveState();
+        root.rescanLibrary();
     }
 
     // Settings entry point for the library folder: validate shape inline, then
@@ -1377,7 +1368,7 @@ Item {
             return "";
         }
         var q = root._shellQuote(clean);
-        libraryProbeProc.command = ["bash", "-c", "[ -d " + q + " ] && [ -r " + q + " ] && find " + q + " -mindepth 2 -maxdepth 2 -type f -name '*.mp3'"];
+        libraryProbeProc.command = ["bash", "-c", "[ -d " + q + " ] && [ -r " + q + " ] && find " + q + " -mindepth 1 -maxdepth 2 -type f -name '*.mp3'"];
         libraryProbeProc.running = true;
         return "";
     }
@@ -1654,7 +1645,8 @@ Item {
             downloadIntent: root.downloadIntent,
             downloadDir: root.downloadDir,
             legacyRoots: root.legacyRoots,
-            libraryDir: root.libraryDir
+            libraryDir: root.libraryDir,
+            libraryReciter: root.libraryReciter
         };
         stateFile.setText(JSON.stringify(state));
     }
@@ -1720,12 +1712,17 @@ Item {
                 root.rescanLibrary();
             }
         }
+        if (typeof data.libraryReciter === "string")
+            root.libraryReciter = data.libraryReciter;
+        if (root.libraryReciter !== "" && !Model.isSafeReciterArg(root.libraryReciter))
+            root.libraryReciter = "";
         if (data.reciterStatus && typeof data.reciterStatus === "object") {
             // Keys must be valid identifiers, values from the known set; junk is
-            // dropped individually.
+            // dropped individually (including legacy "null" keys written by an
+            // old bug).
             var statusClean = {};
             for (var sk in data.reciterStatus) {
-                if (!Model.isSafeIdentifier(sk))
+                if (!Model.isSafeIdentifier(sk) || sk === "null")
                     continue;
                 var sv = data.reciterStatus[sk];
                 if (sv === "downloaded" || sv === "declined" || sv === "failed")
@@ -2111,6 +2108,13 @@ Item {
                     n = 0;
                 }
             } else if (id && !preempted) {
+                // A failed run must not replay on every shell restart: drop the
+                // persisted intent (manual retry via the row icon still works).
+                if (root.downloadIntent && root.downloadIntent.id === id
+                    && root.downloadIntent.surah === n) {
+                    root.downloadIntent = null;
+                    root.saveState();
+                }
                 if (n > 0) {
                     // Single-surah failure: surface it through the existing inline
                     // error pattern; the icon reverts and a retry re-runs quranctl.

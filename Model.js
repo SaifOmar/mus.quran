@@ -65,7 +65,8 @@ var STRINGS = {
     downloadFolder: "Download folder", libraryFolder: "Local library folder",
     apply: "Apply", reset: "Reset",
     invalidPath: "Invalid path", pathNotWritable: "Folder is not writable", libraryUnreadable: "Folder is not readable",
-    libraryHint: "Layout: <folder>/<reciter>/<surah>.mp3",
+    libraryHint: "Layout: <folder>/<reciter>/<surah>.mp3 · or flat <surah>.mp3 + reciter below",
+    libraryReciter: "Reciter for flat folders",
     loadingReciters: "Loading reciters…",
   },
   ar: {
@@ -95,7 +96,8 @@ var STRINGS = {
     downloadFolder: "مجلد التنزيل", libraryFolder: "مجلد المكتبة المحلية",
     apply: "تطبيق", reset: "استعادة",
     invalidPath: "مسار غير صالح", pathNotWritable: "المجلد غير قابل للكتابة", libraryUnreadable: "المجلد غير قابل للقراءة",
-    libraryHint: "الترتيب: <مجلد>/<قارئ>/<سورة>.mp3",
+    libraryHint: "الترتيب: <مجلد>/<قارئ>/<سورة>.mp3 · أو <سورة>.mp3 مباشرة مع اختيار القارئ أدناه",
+    libraryReciter: "القارئ للمجلدات المفردة",
   },
   fr: {
     tabSurah: "Sourate", tabReciter: "Récitant",
@@ -124,7 +126,8 @@ var STRINGS = {
     downloadFolder: "Dossier de téléchargement", libraryFolder: "Dossier de bibliothèque locale",
     apply: "Appliquer", reset: "Réinitialiser",
     invalidPath: "Chemin invalide", pathNotWritable: "Dossier non inscriptible", libraryUnreadable: "Dossier non lisible",
-    libraryHint: "Structure : <dossier>/<récitant>/<sourate>.mp3",
+    libraryHint: "Structure : <dossier>/<récitant>/<sourate>.mp3 · ou <sourate>.mp3 à plat + récitants ci-dessous",
+    libraryReciter: "Récitant pour dossiers plats",
   },
   es: {
     tabSurah: "Sura", tabReciter: "Recitador",
@@ -153,7 +156,8 @@ var STRINGS = {
     downloadFolder: "Carpeta de descargas", libraryFolder: "Carpeta de biblioteca local",
     apply: "Aplicar", reset: "Restablecer",
     invalidPath: "Ruta no válida", pathNotWritable: "La carpeta no es escribible", libraryUnreadable: "La carpeta no es legible",
-    libraryHint: "Estructura: <carpeta>/<recitador>/<sura>.mp3",
+    libraryHint: "Estructura: <carpeta>/<recitador>/<sura>.mp3 · o <sura>.mp3 plano + recitador abajo",
+    libraryReciter: "Recitador para carpetas planas",
   },
   tr: {
     tabSurah: "Sure", tabReciter: "Okuyucu",
@@ -182,7 +186,8 @@ var STRINGS = {
     downloadFolder: "İndirme klasörü", libraryFolder: "Yerel kitaplık klasörü",
     apply: "Uygula", reset: "Sıfırla",
     invalidPath: "Geçersiz yol", pathNotWritable: "Klasör yazılabilir değil", libraryUnreadable: "Klasör okunabilir değil",
-    libraryHint: "Yapı: <klasör>/<okuyucu>/<sure>.mp3",
+    libraryHint: "Yapı: <klasör>/<okuyucu>/<sure>.mp3 · veya düz <sure>.mp3 + aşağıdan okuyucu",
+    libraryReciter: "Düz klasörler için okuyucu",
   },
   id: {
     tabSurah: "Surah", tabReciter: "Qari",
@@ -211,7 +216,8 @@ var STRINGS = {
     downloadFolder: "Folder unduhan", libraryFolder: "Folder pustaka lokal",
     apply: "Terapkan", reset: "Atur ulang",
     invalidPath: "Jalur tidak valid", pathNotWritable: "Folder tidak dapat ditulis", libraryUnreadable: "Folder tidak dapat dibaca",
-    libraryHint: "Struktur: <folder>/<qari>/<surah>.mp3",
+    libraryHint: "Struktur: <folder>/<qari>/<surah>.mp3 · atau <surah>.mp3 datar + qari di bawah",
+    libraryReciter: "Qari untuk folder datar",
   },
   ur: {
     tabSurah: "سورة", tabReciter: "قاری",
@@ -240,7 +246,8 @@ var STRINGS = {
     downloadFolder: "ڈاؤن لوڈ فولڈر", libraryFolder: "مقامی لائبریری فولڈر",
     apply: "لاگو کریں", reset: "ری سیٹ",
     invalidPath: "غلط راستہ", pathNotWritable: "فولڈر لکھنے کے قابل نہیں", libraryUnreadable: "فولڈر پڑھنے کے قابل نہیں",
-    libraryHint: "ترتیب: <فولڈر>/<قاری>/<سورت>.mp3",
+    libraryHint: "ترتیب: <فولڈر>/<قاری>/<سورت>.mp3 · یا فلیٹ <سورت>.mp3 + نیچے قاری",
+    libraryReciter: "فلیٹ فولڈرز کے لیے قاری",
   },
   bn: {
     tabSurah: "সূরা", tabReciter: "ক্বারী",
@@ -269,7 +276,8 @@ var STRINGS = {
     downloadFolder: "ডাউনলোড ফোল্ডার", libraryFolder: "স্থানীয় লাইব্রেরি ফোল্ডার",
     apply: "প্রয়োগ", reset: "রিসেট",
     invalidPath: "অবৈধ পথ", pathNotWritable: "ফোল্ডারে লেখা যায় না", libraryUnreadable: "ফোল্ডার পড়া যায় না",
-    libraryHint: "কাঠামো: <ফোল্ডার>/<ক্বারী>/<সূরা>.mp3",
+    libraryHint: "কাঠামো: <ফোল্ডার>/<ক্বারী>/<সূরা>.mp3 · অথবা সমতল <সূরা>.mp3 + নিচের ক্বারী",
+    libraryReciter: "সমতল ফোল্ডারের জন্য ক্বারী",
   },
   ru: {
     tabSurah: "Сура", tabReciter: "Чтец",
@@ -298,7 +306,8 @@ var STRINGS = {
     downloadFolder: "Папка загрузок", libraryFolder: "Папка локальной библиотеки",
     apply: "Применить", reset: "Сбросить",
     invalidPath: "Неверный путь", pathNotWritable: "Папка недоступна для записи", libraryUnreadable: "Папка недоступна для чтения",
-    libraryHint: "Структура: <папка>/<чтец>/<сура>.mp3",
+    libraryHint: "Структура: <папка>/<чтец>/<сура>.mp3 · или плоско <сура>.mp3 + чтец ниже",
+    libraryReciter: "Чтец для плоских папок",
   },
   zh: {
     tabSurah: "章节", tabReciter: "诵读者",
@@ -327,7 +336,8 @@ var STRINGS = {
     downloadFolder: "下载文件夹", libraryFolder: "本地曲库文件夹",
     apply: "应用", reset: "重置",
     invalidPath: "路径无效", pathNotWritable: "文件夹不可写", libraryUnreadable: "文件夹不可读",
-    libraryHint: "结构：<文件夹>/<诵读家>/<章节>.mp3",
+    libraryHint: "结构：<文件夹>/<诵读家>/<章节>.mp3 · 或平铺 <章节>.mp3 + 下方选择诵读家",
+    libraryReciter: "平铺文件夹的诵读家",
   }
 }
 
@@ -871,6 +881,49 @@ function mergeLegacyRoots(raw, currentRoot, home) {
     out.push(clean)
   }
   return out
+}
+
+// parseLibraryEntries(lines, rootDir, flatReciter) — build the library map
+// from `find <rootDir> -mindepth 1 -maxdepth 2 -name '*.mp3'` output.
+// Depth-1 files (<root>/<n>.mp3) are attributed to flatReciter and skipped
+// when it is empty; depth-2 files (<root>/<id>/<n>.mp3) belong to their
+// folder id. Nested entries win over flat ones on collision. Only canonical
+// 1..114 names under safe identifiers are accepted. Returns {"id:n": true}.
+function parseLibraryEntries(lines, rootDir, flatReciter) {
+  var map = {}
+  var prefix = String(rootDir || "")
+  while (prefix.length > 1 && prefix.charAt(prefix.length - 1) === "/") prefix = prefix.substring(0, prefix.length - 1)
+  prefix = prefix + "/"
+  var raw = Array.isArray(lines) ? lines : String(lines || "").split("\n")
+  // Two passes: flat entries first so a nested folder for the same reciter
+  // deterministically overwrites them.
+  for (var pass = 0; pass < 2; pass++) {
+    for (var i = 0; i < raw.length; i++) {
+      var line = String(raw[i] || "")
+      if (line.indexOf(prefix) !== 0) continue
+      var rel = line.substring(prefix.length)
+      if (rel === "") continue
+      var sep = rel.indexOf("/")
+      var id, fname
+      if (sep === -1) {
+        if (pass !== 0) continue
+        id = String(flatReciter || "")
+        fname = rel
+      } else {
+        if (pass !== 1) continue
+        id = rel.substring(0, sep)
+        fname = rel.substring(sep + 1)
+      }
+      if (id === "") continue
+      if (fname.length < 5 || fname.indexOf(".mp3") !== fname.length - 4) continue
+      var numStr = fname.substring(0, fname.length - 4)
+      if (!/^[0-9]+$/.test(numStr) || (numStr.length > 1 && numStr.charAt(0) === "0")) continue
+      var n = parseInt(numStr, 10)
+      if (!isValidSurahNumber(n) || !isSafeIdentifier(id)) continue
+      map[id + ":" + n] = true
+    }
+  }
+  return map
 }
 
 // --- format helpers --------------------------------------------------------
