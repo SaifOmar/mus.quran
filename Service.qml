@@ -1712,10 +1712,17 @@ Item {
                 root.rescanLibrary();
             }
         }
-        if (typeof data.libraryReciter === "string")
-            root.libraryReciter = data.libraryReciter;
-        if (root.libraryReciter !== "" && !Model.isSafeReciterArg(root.libraryReciter))
-            root.libraryReciter = "";
+        if (typeof data.libraryReciter === "string") {
+            var libRec = data.libraryReciter;
+            if (libRec !== "" && !Model.isSafeReciterArg(libRec))
+                libRec = "";
+            if (libRec !== root.libraryReciter) {
+                root.libraryReciter = libRec;
+                // Flat files are attributed by this binding — rescan so the
+                // map reflects it even when only the reciter changed.
+                root.rescanLibrary();
+            }
+        }
         if (data.reciterStatus && typeof data.reciterStatus === "object") {
             // Keys must be valid identifiers, values from the known set; junk is
             // dropped individually (including legacy "null" keys written by an
