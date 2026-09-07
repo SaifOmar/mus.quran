@@ -6,8 +6,7 @@ A Quran recitation player for the Omarchy bar. Play any surah by any reciter,
 stream it instantly, or download whole mushafs. The playback engine is a small
 **local Go service** (`quranproxyd`) with a CLI companion (`quranctl`) that
 streams, caches, validates, and downloads audio over a hardened loopback
-proxy — prebuilt static binaries are committed in this repo, so it works with
-**zero setup**.
+proxy — attested prebuilt binaries are available from GitHub Releases.
 
 ## Features
 
@@ -29,7 +28,7 @@ proxy — prebuilt static binaries are committed in this repo, so it works with
 * `file` (runtime, used by the media validator; falls back gracefully if
   missing).
 * `ffprobe` (optional; deep validation when present).
-* Go 1.26+ — **only** if you use `install.sh --build` instead of the shipped
+* Go 1.22+ — **only** if you use `install.sh --build` instead of downloading
   prebuilt binaries.
 
 ## Install
@@ -38,22 +37,17 @@ proxy — prebuilt static binaries are committed in this repo, so it works with
 omarchy plugin add https://github.com/saifomar/mus.quran.git --enable
 ```
 
-That's it — the plugin ships prebuilt static binaries
-(`prebuilt/linux-amd64` and `prebuilt/linux-arm64`) that it finds inside its
-own folder, so no extra step is required.
-
-**Optional**: to install (or update) the engine into `~/.local/bin` instead of
-relying on the committed binaries:
+Then install the audio engine (downloads attested prebuilt binaries from
+GitHub Releases):
 
 ```sh
-# copy the shipped prebuilt binaries (no Go needed)
 ./install.sh
+```
 
-# or compile locally
+**Optional**: compile locally instead of downloading:
+
+```sh
 ./install.sh --build
-
-# customize the install prefix
-./install.sh --prefix "$HOME/.local/share/bin"
 ```
 
 Then restart your Omarchy shell.
@@ -93,6 +87,9 @@ make test           # Go unit tests
 
 The Go module has **zero external dependencies** (`go.mod` has no `require`
 block), so builds work offline.
+
+Prebuilt binaries are built and attested via GitHub Actions on each push to
+`main` and on version tags. See [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
 ## Security
 

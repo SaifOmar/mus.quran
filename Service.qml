@@ -82,10 +82,11 @@ Item {
     property string downloadReciter: ""   // reciter currently being downloaded
     property var lastDownload: null       // { id, surah } for retry after failure
     // The audio engine is the Go quranproxyd daemon + quranctl CLI. Their paths
-    // are resolved once at startup (onToolProbe): a committed prebuilt binary in
-    // the plugin folder wins, then the user-installed ~/.local/bin copy. When
-    // neither exists, setupRequired turns on and the engine actions fail with a
-    // "run install.sh" hint instead of silently breaking.
+    // are resolved once at startup (onToolProbe): a prebuilt binary in the
+    // plugin folder wins (from install.sh or manual placement), then the
+    // user-installed ~/.local/bin copy. When neither exists, setupRequired
+    // turns on and the engine actions fail with a "run install.sh" hint
+    // instead of silently breaking.
     property string quranctlBinary: ""
     property bool setupRequired: false
     readonly property string cacheDir: Quickshell.env("HOME") + "/.cache/omarchy/quran"
@@ -1103,10 +1104,10 @@ Item {
     // --- quranproxyd lifecycle + events ---------------------------------------
 
     // Locate the audio-engine binaries once, at startup. The probe prefers a
-    // committed prebuilt binary inside the plugin folder (works straight after
-    // `omarchy plugin add`), then a user-installed copy in ~/.local/bin (dev /
-    // install.sh). Any binary not found flips setupRequired so engine actions
-    // show a clear setup hint instead of failing silently.
+    // prebuilt binary inside the plugin folder (from install.sh or manual
+    // placement), then a user-installed copy in ~/.local/bin. Any binary not
+    // found flips setupRequired so engine actions show a clear setup hint
+    // instead of failing silently.
     function onToolProbe(out) {
         var found = {};
         var lines = String(out || "").split("\n");
@@ -1546,7 +1547,7 @@ Item {
 
     // Full mpv command line, built once the mpris plugin path is known.
     function _mpvCommandLine() {
-        var cmd = ["mpv", "--idle", "--no-video", "--no-terminal", "--no-config", "--player-name=Quran", "--no-input-default-bindings", "--no-osc", "--demuxer-max-bytes=2M", "--demuxer-max-back-bytes=1M", "--demuxer-readahead-secs=15", "--input-ipc-server=" + root.mpvSocketPath];
+        var cmd = ["mpv", "--idle", "--no-video", "--no-terminal", "--no-config", "--no-input-default-bindings", "--no-osc", "--demuxer-max-bytes=2M", "--demuxer-max-back-bytes=1M", "--demuxer-readahead-secs=15", "--input-ipc-server=" + root.mpvSocketPath];
         if (root.mpvMprisScript !== "")
             cmd.push("--script=" + root.mpvMprisScript);
         return cmd;

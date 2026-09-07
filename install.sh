@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # Install the mus.quran audio engine (quranproxyd daemon + quranctl CLI).
 #
-# The plugin ships prebuilt static binaries (prebuilt/<os>-<arch>/), so the
-# default install is a plain copy — no Go toolchain needed. Pass --build to
-# compile locally instead.
+# Downloads attested prebuilt binaries from GitHub Releases by default.
+# Pass --build to compile locally instead.
 #
 # Usage:
-#   install.sh                 copy prebuilt binaries for this machine
-#   install.sh --build         build from source (needs Go 1.26+)
+#   install.sh                 download + install prebuilt binaries
+#   install.sh --build         build from source (needs Go 1.22+)
 #   install.sh --prefix DIR    install into DIR (default: ~/.local/bin)
 #   install.sh --arch amd64    force an architecture (amd64|arm64)
 #
@@ -18,6 +17,7 @@ set -euo pipefail
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 BUILD=0
 ARCH=""
+REPO="saifomar/mus.quran"
 
 usage() {
   sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
@@ -54,23 +54,48 @@ mkdir -p "$PREFIX"
 
 if ((BUILD)); then
   if ! command -v go >/dev/null 2>&1; then
-    echo "install.sh: --build needs a Go toolchain (go 1.26+)" >&2
+    echo "install.sh: --build needs a Go toolchain (go 1.22+)" >&2
     exit 1
   fi
-  GOFLAGS="-trimpath -ldflags=-s" CGO_ENABLED=0 \
-    GOOS=linux GOARCH="$ARCH" go build -o "$PREFIX/quranproxyd" ./cmd/quranproxyd
-  GOFLAGS="-trimpath -ldflags=-s" CGO_ENABLED=0 \
-    GOOS=linux GOARCH="$ARCH" go build -o "$PREFIX/quranctl" ./cmd/quranctl
+  CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags="-s -w" -o "$PREFIX/quranproxyd" ./cmd/quranproxyd
+  CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags="-s -w" -o "$PREFIX/quranctl" ./cmd/quranctl
   echo "install.sh: built quranproxyd + quranctl (linux/$ARCH) into $PREFIX"
 else
-  if [[ ! -x "$SRC_DIR/prebuilt/linux-$ARCH/quranproxyd" \
-        || ! -x "$SRC_DIR/prebuilt/linux-$ARCH/quranctl" ]]; then
-    echo "install.sh: no prebuilt binaries for linux/$ARCH (use --build, or check the repo)" >&2
-    exit 1
+  # Try local prebuilts first (in case they exist from a previous install)
+  if [[ -x "$SRC_DIR/prebuilt/linux-$ARCH/quranproxyd" \
+        && -x "$SRC_DIR/prebuilt/linux-$ARCH/quranctl" ]]; then
+    install -m 0755 "$SRC_DIR/prebuilt/linux-$ARCH/quranproxyd" "$PREFIX/quranproxyd"
+    install -m 0755 "$SRC_DIR/prebuilt/linux-$ARCH/quranctl" "$PREFIX/quranctl"
+    echo "install.sh: installed prebuilt quranproxyd + quranctl (linux/$ARCH) into $PREFIX"
+  else
+    # Download from GitHub Releases
+    if ! command -v curl >/dev/null 2>&1; then
+      echo "install.sh: curl is required for downloading (or use --build)" >&2
+      exit 1
+    fi
+
+    TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+    if [[ -z "$TAG" ]]; then
+      echo "install.sh: could not determine latest release tag" >&2
+      exit 1
+    fi
+
+    echo "install.sh: downloading $TAG for linux/$ARCH..."
+    TMPDIR=$(mktemp -d)
+    trap 'rm -rf "$TMPDIR"' EXIT
+
+    curl -fsSL "https://github.com/$REPO/releases/download/$TAG/linux-$ARCH.tar.gz" -o "$TMPDIR/linux-$ARCH.tar.gz"
+    tar -xzf "$TMPDIR/linux-$ARCH.tar.gz" -C "$TMPDIR"
+
+    # Verify checksums
+    if [[ -f "$TMPDIR/linux-$ARCH/SHA256SUMS" ]]; then
+      (cd "$TMPDIR/linux-$ARCH" && sha256sum -c SHA256SUMS)
+    fi
+
+    install -m 0755 "$TMPDIR/linux-$ARCH/quranproxyd" "$PREFIX/quranproxyd"
+    install -m 0755 "$TMPDIR/linux-$ARCH/quranctl" "$PREFIX/quranctl"
+    echo "install.sh: installed quranproxyd + quranctl ($TAG, linux/$ARCH) into $PREFIX"
   fi
-  install -m 0755 "$SRC_DIR/prebuilt/linux-$ARCH/quranproxyd" "$PREFIX/quranproxyd"
-  install -m 0755 "$SRC_DIR/prebuilt/linux-$ARCH/quranctl" "$PREFIX/quranctl"
-  echo "install.sh: installed prebuilt quranproxyd + quranctl (linux/$ARCH) into $PREFIX"
 fi
 
 echo "install.sh: restart your Omarchy shell (or re-enable the plugin) to load the engine."
