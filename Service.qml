@@ -1585,7 +1585,7 @@ Item {
     // is missing, playback continues without system media control.
     Process {
         id: mprisFindProc
-        command: ["bash", "-c", 'for p in /usr/lib/mpv/mpv-mpris/mpv_mpris.so /usr/lib64/mpv/mpv-mpris/mpv_mpris.so /usr/share/mpv/scripts/mpv-mpris/mpv_mpris.so "$HOME/.config/mpv/scripts/mpv-mpris/mpv_mpris.so" "$HOME/.local/lib/mpv/mpv-mpris/mpv_mpris.so"; do [ -f "$p" ] && { echo "$p"; exit 0; }; done; exit 1']
+        command: ["bash", "-c", 'for p in /usr/lib/mpv/mpv-mpris/mpv_mpris.so /usr/lib64/mpv/mpv-mpris/mpv_mpris.so /usr/share/mpv/scripts/mpv-mpris/mpv_mpris.so /usr/lib/mpv-mpris/mpris.so /etc/mpv/scripts/mpris.so "$HOME/.config/mpv/scripts/mpv-mpris/mpv_mpris.so" "$HOME/.local/lib/mpv/mpv-mpris/mpv_mpris.so"; do [ -f "$p" ] && { echo "$p"; exit 0; }; done; exit 1']
         stdout: StdioCollector {
             waitForEnd: true
             onStreamFinished: root.mpvMprisScript = text.trim()
