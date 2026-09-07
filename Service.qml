@@ -1546,7 +1546,7 @@ Item {
 
     // Full mpv command line, built once the mpris plugin path is known.
     function _mpvCommandLine() {
-        var cmd = ["mpv", "--idle", "--no-video", "--no-terminal", "--no-config", "--no-input-default-bindings", "--no-osc", "--demuxer-max-bytes=2M", "--demuxer-max-back-bytes=1M", "--demuxer-readahead-secs=15", "--input-ipc-server=" + root.mpvSocketPath];
+        var cmd = ["mpv", "--idle", "--no-video", "--no-terminal", "--no-config", "--player-name=Quran", "--no-input-default-bindings", "--no-osc", "--demuxer-max-bytes=2M", "--demuxer-max-back-bytes=1M", "--demuxer-readahead-secs=15", "--input-ipc-server=" + root.mpvSocketPath];
         if (root.mpvMprisScript !== "")
             cmd.push("--script=" + root.mpvMprisScript);
         return cmd;
