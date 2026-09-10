@@ -56,15 +56,6 @@ BarWidget {
     readonly property var filteredSurahs: Model.filterSurahs(quranService ? quranService.surahs : [], root.surahQuery)
     readonly property var filteredReciters: Model.filterReciters(quranService ? quranService.reciters : [], root.reciterQuery)
 
-    // Options for the flat-library reciter binding: None + the catalog.
-    readonly property var libraryReciterOptions: {
-        var opts = [{ value: "", label: "—" }];
-        var list = quranService ? quranService.reciters : [];
-        for (var i = 0; i < list.length; i++)
-            opts.push({ value: list[i].identifier, label: Model.reciterDisplayLabel(list[i], root.lang()) });
-        return opts;
-    }
-
     // Filtering is cheap, but delegate creation is not. Coalesce rapid
     // keystrokes so the virtualized list only receives settled queries.
     Timer {
@@ -90,32 +81,6 @@ BarWidget {
         return Model.trArgs(root.lang(), key, args);
     }
 
-    // Tooltip for a reciter row's download icon. During this reciter's mushaf
-    // run the live tally is appended; a partially-downloaded or library-backed
-    // reciter shows its count so progress stays visible without opening the
-    // prompt.
-    function reciterStatusText(reciterObj, full, downloadingFlag) {
-        if (!quranService || !reciterObj)
-            return "";
-        var label = Model.reciterDisplayLabel(reciterObj, root.lang());
-        if (downloadingFlag)
-            return root.trArgs("downloading", [label]) + " · " + quranService.downloadDone + "/" + quranService.downloadTotal;
-        if (full)
-            return root.tr("downloaded");
-        var count = quranService.downloadedCount(reciterObj.identifier);
-        var lib = 0;
-        try {
-            lib = typeof quranService.libraryCount === "function" ? quranService.libraryCount(reciterObj.identifier) : 0;
-        } catch (e) {
-            lib = 0;
-        }
-        if (count > 0 && count < 114)
-            return root.tr("partial") + " · " + count + "/114";
-        if (lib > 0)
-            return root.tr("inLibrary") + " · " + lib + "/114";
-        return root.tr("download");
-    }
-
     function currentFiltered() {
         return root.activeTab === "surah" ? root.filteredSurahs : root.filteredReciters;
     }
@@ -133,11 +98,8 @@ BarWidget {
             // show on a fresh open.
             root.reciterQuery = "";
             root.surahQuery = "";
-            if (quranService) {
+            if (quranService)
                 quranService.refreshCacheSize();
-                // Pick up files added to the library folder since the last scan.
-                quranService.rescanLibrary();
-            }
         }
     }
 
@@ -738,18 +700,11 @@ BarWidget {
                                                 downloadRevision;
                                                 return root.activeTab === "surah" && quranService ? quranService.isSurahDownloaded(quranService.reciterId, surah.number) : false;
                                             }
-                                            // Present in the configured local library (not a
-                                            // download): shown as a neutral check so rows stay
-                                            // honest about where playback will come from.
-                                            readonly property bool inLibrary: {
-                                                downloadRevision;
-                                                return root.activeTab === "surah" && quranService ? quranService.libraryHas(quranService.reciterId, surah.number) : false;
-                                            }
                                             readonly property bool isDownloading: root.activeTab === "surah" ? (quranService ? quranService.isSurahDownloading(quranService.reciterId, surah.number) : false) : (quranService ? quranService.isReciterDownloading(reciter.identifier) : false)
 
                                             readonly property color rowTitle: selected ? Qt.lighter(root.accentC, 1.2) : root.fg
                                             readonly property color rowSubtitle: selected ? Util.alpha(root.accentC, 0.75) : root.mutedC
-                                            readonly property color actionColor: surahDownloaded || fullDownloaded || isDownloading ? root.accentC : (inLibrary ? root.fg : root.mutedC)
+                                            readonly property color actionColor: surahDownloaded || fullDownloaded || isDownloading ? root.accentC : root.mutedC
 
                                             width: listView.width
                                             height: rowInner.implicitHeight + Style.space(16)
@@ -840,7 +795,7 @@ BarWidget {
                                                     Text {
                                                         anchors.centerIn: parent
                                                         visible: !isDownloading
-                                                        text: root.activeTab === "surah" ? ((surahDownloaded || inLibrary) ? "󰗠" : "󰇚") : (fullDownloaded ? "󰗠" : "󰇚")
+                                                        text: root.activeTab === "surah" ? (surahDownloaded ? "󰗠" : "󰇚") : (fullDownloaded ? "󰗠" : "󰇚")
                                                         color: rowDelegate.actionColor
                                                         font.family: root.bar.fontFamily
                                                         font.pixelSize: Style.font.bodySmall
@@ -902,18 +857,7 @@ BarWidget {
 
                                                     PanelToolTip {
                                                         visible: downloadActionArea.containsMouse
-                                                        text: {
-                                                            if (root.activeTab === "surah") {
-                                                                if (isDownloading)
-                                                                    return root.trArgs("downloadingSurah", [String(surah.number)]);
-                                                                if (surahDownloaded)
-                                                                    return root.tr("downloaded");
-                                                                if (inLibrary)
-                                                                    return root.tr("inLibrary");
-                                                                return root.tr("download");
-                                                            }
-                                                            return root.reciterStatusText(reciter, fullDownloaded, isDownloading);
-                                                        }
+                                                        text: root.activeTab === "surah" ? (isDownloading ? root.trArgs("downloading", [Model.reciterDisplayLabel(root.currentReciter, root.lang())]) : (surahDownloaded ? root.tr("downloaded") : root.tr("download"))) : (isDownloading ? root.trArgs("downloading", [Model.reciterDisplayLabel(reciter, root.lang())]) : (fullDownloaded ? root.tr("downloaded") : root.tr("download")))
                                                         fontFamily: root.bar.fontFamily
                                                     }
                                                 }
@@ -943,26 +887,6 @@ BarWidget {
                 anchors.fill: parent
                 spacing: Style.space(16)
                 visible: root.settingsOpen
-                onVisibleChanged: {
-                    if (!visible || !quranService)
-                        return;
-                    // Fresh values on every open; stale inline errors cleared.
-                    downloadDirField.text = quranService.downloadDir;
-                    libraryDirField.text = quranService.libraryDir;
-                    if (quranService.settingsError !== "")
-                        quranService.settingsError = "";
-                }
-
-                Connections {
-                    target: quranService
-                    // Async commit paths (writability probe) land here.
-                    function onDataDirChanged() {
-                        downloadDirField.text = quranService ? quranService.dataDir : "";
-                    }
-                    function onLibraryDirChanged() {
-                        libraryDirField.text = quranService ? quranService.libraryDir : "";
-                    }
-                }
 
                 Row {
                     width: parent.width
@@ -1011,145 +935,6 @@ BarWidget {
                             if (quranService)
                                 quranService.setLanguage(v);
                         }
-                    }
-                }
-
-                // ---- storage ----
-                Column {
-                    width: parent.width
-                    spacing: Style.space(6)
-
-                    Text {
-                        text: root.tr("storage")
-                        color: root.mutedC
-                        font.family: root.bar.fontFamily
-                        font.pixelSize: Style.font.caption
-                    }
-
-                    Text {
-                        text: root.tr("downloadFolder")
-                        color: root.mutedC
-                        font.family: root.bar.fontFamily
-                        font.pixelSize: Style.font.caption
-                    }
-
-                    TextField {
-                        id: downloadDirField
-                        width: parent.width
-                        placeholderText: quranService ? quranService.defaultDataDir : ""
-                        foreground: root.fg
-                        font.family: root.bar.fontFamily
-                    }
-
-                    Row {
-                        spacing: Style.space(6)
-
-                        Button {
-                            text: root.tr("apply")
-                            foreground: root.fg
-                            horizontalPadding: Style.spacing.controlPaddingX
-                            verticalPadding: Style.spacing.controlPaddingY
-                            onClicked: {
-                                if (!quranService)
-                                    return;
-                                var err = quranService.applyDownloadDir(downloadDirField.text);
-                                if (err)
-                                    quranService.settingsError = err;
-                            }
-                        }
-
-                        Button {
-                            visible: quranService && quranService.downloadDir !== ""
-                            text: root.tr("reset")
-                            foreground: root.mutedC
-                            horizontalPadding: Style.spacing.controlPaddingX
-                            verticalPadding: Style.spacing.controlPaddingY
-                            onClicked: if (quranService)
-                                quranService.applyDownloadDir("")
-                        }
-                    }
-
-                    Item {
-                        width: 1
-                        height: Style.space(4)
-                        implicitHeight: height
-                    }
-
-                    Text {
-                        text: root.tr("libraryFolder")
-                        color: root.mutedC
-                        font.family: root.bar.fontFamily
-                        font.pixelSize: Style.font.caption
-                    }
-
-                    TextField {
-                        id: libraryDirField
-                        width: parent.width
-                        placeholderText: "~/music/quran"
-                        foreground: root.fg
-                        font.family: root.bar.fontFamily
-                    }
-
-                    Text {
-                        text: root.tr("libraryHint")
-                        color: root.mutedC
-                        font.family: root.bar.fontFamily
-                        font.pixelSize: Style.font.caption
-                        elide: Text.ElideRight
-                        width: parent.width
-                    }
-
-                    // Reciter that flat (depth-1) library files belong to.
-                    SearchableDropdown {
-                        id: libraryReciterDropdown
-                        width: parent.width
-                        value: quranService ? quranService.libraryReciter : ""
-                        options: root.libraryReciterOptions
-                        showLabel: false
-                        foreground: root.fg
-                        placeholderText: root.tr("libraryReciter")
-                        onChanged: function (v) {
-                            if (quranService)
-                                quranService.setLibraryReciter(v);
-                        }
-                    }
-
-                    Row {
-                        spacing: Style.space(6)
-
-                        Button {
-                            text: root.tr("apply")
-                            foreground: root.fg
-                            horizontalPadding: Style.spacing.controlPaddingX
-                            verticalPadding: Style.spacing.controlPaddingY
-                            onClicked: {
-                                if (!quranService)
-                                    return;
-                                var err = quranService.applyLibraryDir(libraryDirField.text);
-                                if (err)
-                                    quranService.settingsError = err;
-                            }
-                        }
-
-                        Button {
-                            visible: quranService && quranService.libraryDir !== ""
-                            text: root.tr("reset")
-                            foreground: root.mutedC
-                            horizontalPadding: Style.spacing.controlPaddingX
-                            verticalPadding: Style.spacing.controlPaddingY
-                            onClicked: if (quranService)
-                                quranService.applyLibraryDir("")
-                        }
-                    }
-
-                    Text {
-                        width: parent.width
-                        text: quranService ? quranService.settingsError : ""
-                        color: root.bar.urgent
-                        font.family: root.bar.fontFamily
-                        font.pixelSize: Style.font.caption
-                        wrapMode: Text.WordWrap
-                        visible: quranService && quranService.settingsError !== ""
                     }
                 }
 
@@ -1270,11 +1055,8 @@ BarWidget {
                 text: {
                     if (!quranService)
                         return "";
-                    if (quranService.downloading) {
-                        var base = root.trArgs("downloading", [root.pendingDownloadReciter ? Model.reciterDisplayLabel(root.pendingDownloadReciter, root.lang()) : ""]);
-                        var failed = quranService.downloadFailedSurahs ? quranService.downloadFailedSurahs.length : 0;
-                        return failed > 0 ? base + " · " + failed + " ✗" : base;
-                    }
+                    if (quranService.downloading)
+                        return root.trArgs("downloading", [root.pendingDownloadReciter ? Model.reciterDisplayLabel(root.pendingDownloadReciter, root.lang()) : ""]);
                     var id = root.pendingDownloadReciter ? root.pendingDownloadReciter.identifier : "";
                     if (id) {
                         var missing = quranService.missingCount(id);

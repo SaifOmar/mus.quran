@@ -1,0 +1,2 @@
+# No release workflow — this is a Python-only plugin.
+# The plugin folder is self-contained; no binary build or attest needed.

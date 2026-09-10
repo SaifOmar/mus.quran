@@ -23,7 +23,7 @@ var API_RECITERS = "https://api.islamic.app/v1/audio/reciters"
 var API_RECITERS_ENG = "https://www.mp3quran.net/api/v3/reciters?language=eng"
 var API_RECITERS_AR = "https://www.mp3quran.net/api/v3/reciters?language=ar"
 
-var STATE_VERSION = 3
+var STATE_VERSION = 2
 var CATALOG_TTL_MS = 24 * 60 * 60 * 1000
 // Per-surah cap (~300 MB), shared with the quranctl downloader.
 var MAX_SURAH_BYTES = 314572800
@@ -53,20 +53,15 @@ var STRINGS = {
     noAudio: "No audio available for this reciter",
     reciterLoadFailed: "Couldn't load reciters",
     playbackFailed: "Playback failed. Retry, or stream it instead.",
-    downloaded: "Downloaded", partial: "Partial", notDownloaded: "Not downloaded", inLibrary: "In library",
+    downloaded: "Downloaded", partial: "Partial", notDownloaded: "Not downloaded",
     tooltip: "Quran", nowPlaying: "Now playing · %1",
     surahTabTitle: "Surah", reciterTabTitle: "Reciter",
     verses: "%1 verses", seekHint: "Click to seek",
     invalidInput: "Invalid reciter or surah",
     browse: "Browse", downloadingSurah: "Downloading surah %1",
-    clearCache: "Clear cache", cacheSize: "Cache: %1", downloadFailed: "Download failed", cacheClearFailed: "Cache unavailable", setupRequired: "Audio engine missing — run install.sh in the plugin folder",
+    clearCache: "Clear cache", cacheSize: "Cache: %1", downloadFailed: "Download failed", cacheClearFailed: "Cache unavailable", setupRequired: "Audio engine missing — reinstall or restart the plugin",
     mpvMissing: "Playback unavailable — is mpv installed?",
     settings: "Settings", storage: "Storage & Cache", clear: "Clear",
-    downloadFolder: "Download folder", libraryFolder: "Local library folder",
-    apply: "Apply", reset: "Reset",
-    invalidPath: "Invalid path", pathNotWritable: "Folder is not writable", libraryUnreadable: "Folder is not readable",
-    libraryHint: "Layout: <folder>/<reciter>/<surah>.mp3 · or flat <surah>.mp3 + reciter below",
-    libraryReciter: "Reciter for flat folders",
     loadingReciters: "Loading reciters…",
   },
   ar: {
@@ -84,20 +79,15 @@ var STRINGS = {
     reciterLoadFailed: "تعذّر تحميل القُرّاء",
     loadingReciters: "جارٍ تحميل القُرّاء…",
     playbackFailed: "فشل التشغيل. أعد المحاولة أو قم بالبث.",
-    downloaded: "تم التنزيل", partial: "جزئي", notDownloaded: "لم يتم التنزيل", inLibrary: "في المكتبة",
+    downloaded: "تم التنزيل", partial: "جزئي", notDownloaded: "لم يتم التنزيل",
     tooltip: "القرآن", nowPlaying: "قيد التشغيل · %1",
     surahTabTitle: "السورة", reciterTabTitle: "القارئ",
     verses: "%1 آية", seekHint: "انقر للانتقال",
     invalidInput: "قارئ أو سورة غير صالحة",
     browse: "تصفح", downloadingSurah: "جارٍ تحميل السورة %1",
-    clearCache: "مسح التخزين المؤقت", cacheSize: "التخزين المؤقت: %1", downloadFailed: "فشل التنزيل", cacheClearFailed: "ذاكرة التخزين المؤقت غير متاحة", setupRequired: "محرك الصوت مفقود — شغّل install.sh في مجلد الإضافة",
+    clearCache: "مسح التخزين المؤقت", cacheSize: "التخزين المؤقت: %1", downloadFailed: "فشل التنزيل", cacheClearFailed: "ذاكرة التخزين المؤقت غير متاحة", setupRequired: "محرك الصوت مفقود — أعد تثبيت الإضافة أو أعد تشغيلها",
     mpvMissing: "التشغيل غير متاح — هل mpv مثبّت؟",
     settings: "الإعدادات", storage: "التخزين والذاكرة", clear: "مسح",
-    downloadFolder: "مجلد التنزيل", libraryFolder: "مجلد المكتبة المحلية",
-    apply: "تطبيق", reset: "استعادة",
-    invalidPath: "مسار غير صالح", pathNotWritable: "المجلد غير قابل للكتابة", libraryUnreadable: "المجلد غير قابل للقراءة",
-    libraryHint: "الترتيب: <مجلد>/<قارئ>/<سورة>.mp3 · أو <سورة>.mp3 مباشرة مع اختيار القارئ أدناه",
-    libraryReciter: "القارئ للمجلدات المفردة",
   },
   fr: {
     tabSurah: "Sourate", tabReciter: "Récitant",
@@ -114,20 +104,15 @@ var STRINGS = {
     reciterLoadFailed: "Impossible de charger les récitants",
     loadingReciters: "Chargement des récitants…",
     playbackFailed: "Échec de lecture. Réessayez ou passez en streaming.",
-    downloaded: "Téléchargé", partial: "Partiel", notDownloaded: "Non téléchargé", inLibrary: "Dans la bibliothèque",
+    downloaded: "Téléchargé", partial: "Partiel", notDownloaded: "Non téléchargé",
     tooltip: "Coran", nowPlaying: "Lecture en cours · %1",
     surahTabTitle: "Sourate", reciterTabTitle: "Récitant",
     verses: "%1 versets", seekHint: "Cliquer pour avancer",
     invalidInput: "Récitant ou sourate invalide",
     browse: "Parcourir", downloadingSurah: "Téléchargement de la sourate %1",
-    clearCache: "Vider le cache", cacheSize: "Cache : %1", downloadFailed: "Échec du téléchargement", cacheClearFailed: "Cache indisponible", setupRequired: "Moteur audio absent — lancez install.sh dans le dossier du plugin",
+    clearCache: "Vider le cache", cacheSize: "Cache : %1", downloadFailed: "Échec du téléchargement", cacheClearFailed: "Cache indisponible", setupRequired: "Moteur audio absent — réinstallez ou redémarrez le plugin",
     mpvMissing: "Lecture indisponible — mpv est-il installé ?",
     settings: "Paramètres", storage: "Stockage et Cache", clear: "Vider",
-    downloadFolder: "Dossier de téléchargement", libraryFolder: "Dossier de bibliothèque locale",
-    apply: "Appliquer", reset: "Réinitialiser",
-    invalidPath: "Chemin invalide", pathNotWritable: "Dossier non inscriptible", libraryUnreadable: "Dossier non lisible",
-    libraryHint: "Structure : <dossier>/<récitant>/<sourate>.mp3 · ou <sourate>.mp3 à plat + récitants ci-dessous",
-    libraryReciter: "Récitant pour dossiers plats",
   },
   es: {
     tabSurah: "Sura", tabReciter: "Recitador",
@@ -144,20 +129,15 @@ var STRINGS = {
     reciterLoadFailed: "No se pudieron cargar los recitadores",
     loadingReciters: "Cargando recitadores…",
     playbackFailed: "Error de reproducción. Reintenta o usa streaming.",
-    downloaded: "Descargado", partial: "Parcial", notDownloaded: "No descargado", inLibrary: "En la biblioteca",
+    downloaded: "Descargado", partial: "Parcial", notDownloaded: "No descargado",
     tooltip: "Corán", nowPlaying: "Reproduciendo · %1",
     surahTabTitle: "Sura", reciterTabTitle: "Recitador",
     verses: "%1 versículos", seekHint: "Haz clic para buscar",
     invalidInput: "Recitador o sura no válidos",
     browse: "Explorar", downloadingSurah: "Descargando sura %1",
-    clearCache: "Vaciar caché", cacheSize: "Caché: %1", downloadFailed: "Error de descarga", cacheClearFailed: "Caché no disponible", setupRequired: "Motor de audio ausente — ejecuta install.sh en la carpeta del plugin",
+    clearCache: "Vaciar caché", cacheSize: "Caché: %1", downloadFailed: "Error de descarga", cacheClearFailed: "Caché no disponible", setupRequired: "Motor de audio ausente — reinstala o reinicia el plugin",
     mpvMissing: "Reproducción no disponible — ¿está instalado mpv?",
     settings: "Ajustes", storage: "Almacenamiento y Caché", clear: "Vaciar",
-    downloadFolder: "Carpeta de descargas", libraryFolder: "Carpeta de biblioteca local",
-    apply: "Aplicar", reset: "Restablecer",
-    invalidPath: "Ruta no válida", pathNotWritable: "La carpeta no es escribible", libraryUnreadable: "La carpeta no es legible",
-    libraryHint: "Estructura: <carpeta>/<recitador>/<sura>.mp3 · o <sura>.mp3 plano + recitador abajo",
-    libraryReciter: "Recitador para carpetas planas",
   },
   tr: {
     tabSurah: "Sure", tabReciter: "Okuyucu",
@@ -174,20 +154,15 @@ var STRINGS = {
     reciterLoadFailed: "Okuyucular yüklenemedi",
     loadingReciters: "Okuyucular yükleniyor…",
     playbackFailed: "Oynatma başarısız. Yeniden deneyin veya akış kullanın.",
-    downloaded: "İndirildi", partial: "Kısmi", notDownloaded: "İndirilmedi", inLibrary: "Kitaplıkta",
+    downloaded: "İndirildi", partial: "Kısmi", notDownloaded: "İndirilmedi",
     tooltip: "Kuran", nowPlaying: "Şu an çalıyor · %1",
     surahTabTitle: "Sure", reciterTabTitle: "Okuyucu",
     verses: "%1 ayet", seekHint: "Gitmek için tıklayın",
     invalidInput: "Geçersiz okuyucu veya sure",
     browse: "Gözat", downloadingSurah: "%1. sure indiriliyor",
-    clearCache: "Önbelleği temizle", cacheSize: "Önbellek: %1", downloadFailed: "İndirme başarısız", cacheClearFailed: "Önbellek kullanılamıyor", setupRequired: "Ses motoru eksik — eklenti klasöründe install.sh çalıştırın",
+    clearCache: "Önbelleği temizle", cacheSize: "Önbellek: %1", downloadFailed: "İndirme başarısız", cacheClearFailed: "Önbellek kullanılamıyor", setupRequired: "Ses motoru eksik — eklentiyi yeniden yükleyin veya yeniden başlatın",
     mpvMissing: "Oynatma kullanılamıyor — mpv yüklü mü?",
     settings: "Ayarlar", storage: "Depolama ve Önbellek", clear: "Temizle",
-    downloadFolder: "İndirme klasörü", libraryFolder: "Yerel kitaplık klasörü",
-    apply: "Uygula", reset: "Sıfırla",
-    invalidPath: "Geçersiz yol", pathNotWritable: "Klasör yazılabilir değil", libraryUnreadable: "Klasör okunabilir değil",
-    libraryHint: "Yapı: <klasör>/<okuyucu>/<sure>.mp3 · veya düz <sure>.mp3 + aşağıdan okuyucu",
-    libraryReciter: "Düz klasörler için okuyucu",
   },
   id: {
     tabSurah: "Surah", tabReciter: "Qari",
@@ -204,20 +179,15 @@ var STRINGS = {
     reciterLoadFailed: "Gagal memuat daftar qari",
     loadingReciters: "Memuat daftar qari…",
     playbackFailed: "Pemutaran gagal. Coba lagi atau gunakan streaming.",
-    downloaded: "Terunduh", partial: "Sebagian", notDownloaded: "Belum diunduh", inLibrary: "Di pustaka",
+    downloaded: "Terunduh", partial: "Sebagian", notDownloaded: "Belum diunduh",
     tooltip: "Al-Qur'an", nowPlaying: "Sedang diputar · %1",
     surahTabTitle: "Surah", reciterTabTitle: "Qari",
     verses: "%1 ayat", seekHint: "Klik untuk berpindah",
     invalidInput: "Qari atau surah tidak valid",
     browse: "Jelajahi", downloadingSurah: "Mengunduh surah %1",
-    clearCache: "Bersihkan cache", cacheSize: "Cache: %1", downloadFailed: "Unduhan gagal", cacheClearFailed: "Cache tidak tersedia", setupRequired: "Mesin audio tidak ada — jalankan install.sh di folder plugin",
+    clearCache: "Bersihkan cache", cacheSize: "Cache: %1", downloadFailed: "Unduhan gagal", cacheClearFailed: "Cache tidak tersedia", setupRequired: "Mesin audio tidak ada — pasang ulang atau mulai ulang plugin",
     mpvMissing: "Pemutaran tidak tersedia — apakah mpv terpasang?",
     settings: "Pengaturan", storage: "Penyimpanan & Cache", clear: "Bersihkan",
-    downloadFolder: "Folder unduhan", libraryFolder: "Folder pustaka lokal",
-    apply: "Terapkan", reset: "Atur ulang",
-    invalidPath: "Jalur tidak valid", pathNotWritable: "Folder tidak dapat ditulis", libraryUnreadable: "Folder tidak dapat dibaca",
-    libraryHint: "Struktur: <folder>/<qari>/<surah>.mp3 · atau <surah>.mp3 datar + qari di bawah",
-    libraryReciter: "Qari untuk folder datar",
   },
   ur: {
     tabSurah: "سورة", tabReciter: "قاری",
@@ -234,20 +204,15 @@ var STRINGS = {
     reciterLoadFailed: "قاریوں کی فہرست لوڈ نہیں ہو سکی",
     loadingReciters: "قاریوں کی فہرست لوڈ ہو رہی ہے…",
     playbackFailed: "پلے بیک ناکام۔ دوبارہ کوشش کریں یا سٹریم کریں۔",
-    downloaded: "ڈاؤن لوڈ شدہ", partial: "جزوی", notDownloaded: "ڈاؤن لوڈ نہیں ہوا", inLibrary: "لائبریری میں",
+    downloaded: "ڈاؤن لوڈ شدہ", partial: "جزوی", notDownloaded: "ڈاؤن لوڈ نہیں ہوا",
     tooltip: "قرآن", nowPlaying: "چل رہا ہے · %1",
     surahTabTitle: "سورت", reciterTabTitle: "قاری",
     verses: "%1 آیات", seekHint: "جگہ کے لیے کلک کریں",
     invalidInput: "غیر درست قاری یا سورت",
     browse: "براؤز کریں", downloadingSurah: "سورت %1 ڈاؤن لوڈ ہو رہی ہے",
-    clearCache: "کیشے صاف کریں", cacheSize: "کیشے: %1", downloadFailed: "ڈاؤن لوڈ ناکام", cacheClearFailed: "کیشے دستیاب نہیں", setupRequired: "آڈیو انجن موجود نہیں — پلگ ان فولڈر میں install.sh چلائیں",
+    clearCache: "کیشے صاف کریں", cacheSize: "کیشے: %1", downloadFailed: "ڈاؤن لوڈ ناکام", cacheClearFailed: "کیشے دستیاب نہیں", setupRequired: "آڈیو انجن موجود نہیں — پلگ ان دوبارہ انسٹال کریں یا دوبارہ شروع کریں",
     mpvMissing: "پلے بیک دستیاب نہیں — کیا mpv نصب ہے؟",
     settings: "سیٹنگز", storage: "سٹوریج اور کیشے", clear: "صاف کریں",
-    downloadFolder: "ڈاؤن لوڈ فولڈر", libraryFolder: "مقامی لائبریری فولڈر",
-    apply: "لاگو کریں", reset: "ری سیٹ",
-    invalidPath: "غلط راستہ", pathNotWritable: "فولڈر لکھنے کے قابل نہیں", libraryUnreadable: "فولڈر پڑھنے کے قابل نہیں",
-    libraryHint: "ترتیب: <فولڈر>/<قاری>/<سورت>.mp3 · یا فلیٹ <سورت>.mp3 + نیچے قاری",
-    libraryReciter: "فلیٹ فولڈرز کے لیے قاری",
   },
   bn: {
     tabSurah: "সূরা", tabReciter: "ক্বারী",
@@ -264,20 +229,15 @@ var STRINGS = {
     reciterLoadFailed: "ক্বারীদের তালিকা লোড করা যায়নি",
     loadingReciters: "ক্বারীদের তালিকা লোড হচ্ছে…",
     playbackFailed: "প্লেব্যাক ব্যর্থ। আবার চেষ্টা করুন বা স্ট্রিম করুন।",
-    downloaded: "ডাউনলোড হয়েছে", partial: "আংশিক", notDownloaded: "ডাউনলোড হয়নি", inLibrary: "লাইব্রেরিতে",
+    downloaded: "ডাউনলোড হয়েছে", partial: "আংশিক", notDownloaded: "ডাউনলোড হয়নি",
     tooltip: "কুরআন", nowPlaying: "চলছে · %1",
     surahTabTitle: "সূরা", reciterTabTitle: "ক্বারী",
     verses: "%1 আয়াত", seekHint: "যেতে ক্লিক করুন",
     invalidInput: "অবৈধ ক্বারী বা সূরা",
     browse: "ব্রাউজ করুন", downloadingSurah: "সূরা %1 ডাউনলোড হচ্ছে",
-    clearCache: "ক্যাশ মুছুন", cacheSize: "ক্যাশ: %1", downloadFailed: "ডাউনলোড ব্যর্থ", cacheClearFailed: "ক্যাশ উপলব্ধ নেই", setupRequired: "অডিও ইঞ্জিন অনুপস্থিত — প্লাগইন ফোল্ডারে install.sh চালান",
+    clearCache: "ক্যাশ মুছুন", cacheSize: "ক্যাশ: %1", downloadFailed: "ডাউনলোড ব্যর্থ", cacheClearFailed: "ক্যাশ উপলব্ধ নেই", setupRequired: "অডিও ইঞ্জিন অনুপস্থিত — প্লাগইন পুনরায় ইনস্টল করুন বা পুনরায় চালু করুন",
     mpvMissing: "প্লেব্যাক পাওয়া যাচ্ছে না — mpv কি ইনস্টল আছে?",
     settings: "সেটিংস", storage: "স্টোরেজ ও ক্যাশ", clear: "মুছুন",
-    downloadFolder: "ডাউনলোড ফোল্ডার", libraryFolder: "স্থানীয় লাইব্রেরি ফোল্ডার",
-    apply: "প্রয়োগ", reset: "রিসেট",
-    invalidPath: "অবৈধ পথ", pathNotWritable: "ফোল্ডারে লেখা যায় না", libraryUnreadable: "ফোল্ডার পড়া যায় না",
-    libraryHint: "কাঠামো: <ফোল্ডার>/<ক্বারী>/<সূরা>.mp3 · অথবা সমতল <সূরা>.mp3 + নিচের ক্বারী",
-    libraryReciter: "সমতল ফোল্ডারের জন্য ক্বারী",
   },
   ru: {
     tabSurah: "Сура", tabReciter: "Чтец",
@@ -294,20 +254,15 @@ var STRINGS = {
     reciterLoadFailed: "Не удалось загрузить чтецов",
     loadingReciters: "Загрузка чтецов…",
     playbackFailed: "Ошибка воспроизведения. Повторите или включите стриминг.",
-    downloaded: "Скачано", partial: "Частично", notDownloaded: "Не скачано", inLibrary: "В библиотеке",
+    downloaded: "Скачано", partial: "Частично", notDownloaded: "Не скачано",
     tooltip: "Коран", nowPlaying: "Сейчас играет · %1",
     surahTabTitle: "Сура", reciterTabTitle: "Чтец",
     verses: "%1 аятов", seekHint: "Нажмите для перемотки",
     invalidInput: "Неверный чтец или сура",
     browse: "Обзор", downloadingSurah: "Скачивание суры %1",
-    clearCache: "Очистить кэш", cacheSize: "Кэш: %1", downloadFailed: "Ошибка загрузки", cacheClearFailed: "Кэш недоступен", setupRequired: "Аудио-движок отсутствует — запустите install.sh в папке плагина",
+    clearCache: "Очистить кэш", cacheSize: "Кэш: %1", downloadFailed: "Ошибка загрузки", cacheClearFailed: "Кэш недоступен", setupRequired: "Аудио-движок отсутствует — переустановите или перезапустите плагин",
     mpvMissing: "Воспроизведение недоступно — установлен ли mpv?",
     settings: "Настройки", storage: "Память и Кэш", clear: "Очистить",
-    downloadFolder: "Папка загрузок", libraryFolder: "Папка локальной библиотеки",
-    apply: "Применить", reset: "Сбросить",
-    invalidPath: "Неверный путь", pathNotWritable: "Папка недоступна для записи", libraryUnreadable: "Папка недоступна для чтения",
-    libraryHint: "Структура: <папка>/<чтец>/<сура>.mp3 · или плоско <сура>.mp3 + чтец ниже",
-    libraryReciter: "Чтец для плоских папок",
   },
   zh: {
     tabSurah: "章节", tabReciter: "诵读者",
@@ -324,20 +279,15 @@ var STRINGS = {
     reciterLoadFailed: "无法加载诵读者列表",
     loadingReciters: "正在加载诵读者列表…",
     playbackFailed: "播放失败。请重试或改用流播放。",
-    downloaded: "已下载", partial: "部分", notDownloaded: "未下载", inLibrary: "在曲库中",
+    downloaded: "已下载", partial: "部分", notDownloaded: "未下载",
     tooltip: "古兰经", nowPlaying: "正在播放 · %1",
     surahTabTitle: "章节", reciterTabTitle: "诵读者",
     verses: "%1 节经文", seekHint: "点击跳转",
     invalidInput: "诵读者或章节无效",
     browse: "浏览", downloadingSurah: "正在下载章节 %1",
-    clearCache: "清除缓存", cacheSize: "缓存：%1", downloadFailed: "下载失败", cacheClearFailed: "缓存不可用", setupRequired: "缺少音频引擎 — 请在插件目录中运行 install.sh",
+    clearCache: "清除缓存", cacheSize: "缓存：%1", downloadFailed: "下载失败", cacheClearFailed: "缓存不可用", setupRequired: "缺少音频引擎 — 请重新安装或重启插件",
     mpvMissing: "播放不可用 — 是否已安装 mpv？",
     settings: "设置", storage: "存储与缓存", clear: "清除",
-    downloadFolder: "下载文件夹", libraryFolder: "本地曲库文件夹",
-    apply: "应用", reset: "重置",
-    invalidPath: "路径无效", pathNotWritable: "文件夹不可写", libraryUnreadable: "文件夹不可读",
-    libraryHint: "结构：<文件夹>/<诵读家>/<章节>.mp3 · 或平铺 <章节>.mp3 + 下方选择诵读家",
-    libraryReciter: "平铺文件夹的诵读家",
   }
 }
 
@@ -813,117 +763,6 @@ function localAudioUrl(dataDir, reciterId, surahNumber) {
   if (typeof dataDir !== "string" || dataDir.indexOf("..") !== -1) return ""
   if (!isSafeIdentifier(reciterId) || !isValidSurahNumber(Number(surahNumber))) return ""
   return "file://" + dataDir + "/" + reciterId + "/" + Number(surahNumber) + ".mp3"
-}
-
-// --- configurable storage roots ---------------------------------------------
-
-// sanitizeDirPath(p, home) — validate a user-configured directory (download
-// root or library root). Expands a leading "~/", requires an absolute result,
-// and rejects traversal components and control characters anywhere in the
-// input (same rules as quranctl's --dest-root). Returns the cleaned path, or
-// "" when the input is unusable. An empty input means "back to default".
-function sanitizeDirPath(p, home) {
-  p = String(p === undefined || p === null ? "" : p).trim()
-  if (p === "") return ""
-  if (p.indexOf("~/") === 0) {
-    home = String(home || "")
-    if (home === "" || home.charAt(0) !== "/") return ""
-    p = home + p.substring(1)
-  }
-  if (p.length === 0 || p.charAt(0) !== "/") return ""
-  for (var i = 0; i < p.length; i++) {
-    var c = p.charCodeAt(i)
-    if (c < 32 || c === 127) return ""
-  }
-  var parts = p.split("/")
-  for (var j = 0; j < parts.length; j++) {
-    if (parts[j] === "..") return ""
-  }
-  // Collapse duplicate slashes and any trailing slash (root "/" stays "/").
-  var out = []
-  for (var k = 0; k < parts.length; k++) {
-    if (parts[k] !== "" || out.length === 0) out.push(parts[k])
-  }
-  while (out.length > 1 && out[out.length - 1] === "") out.pop()
-  return out.join("/")
-}
-
-// pushLegacyRoot(roots, previous, current) — remember a previously-used
-// download root so its already-downloaded files stay resolvable after the
-// user changes the folder. Deduped, never equal to the current root, capped.
-var MAX_LEGACY_ROOTS = 8
-
-function pushLegacyRoot(roots, previous, current) {
-  var out = Array.isArray(roots) ? roots.slice() : []
-  previous = String(previous || "")
-  current = String(current || "")
-  if (previous === "" || !Array.isArray(out)) return out
-  if (previous === current) return out
-  var idx = out.indexOf(previous)
-  if (idx !== -1) out.splice(idx, 1)
-  // Switching back to a remembered root must drop it from history.
-  idx = out.indexOf(current)
-  if (idx !== -1) out.splice(idx, 1)
-  out.push(previous)
-  while (out.length > MAX_LEGACY_ROOTS) out.shift()
-  return out
-}
-
-// mergeLegacyRoots(raw, currentRoot) — sanitize a persisted legacy-roots
-// array on load: valid paths only, deduped, current root dropped, capped.
-function mergeLegacyRoots(raw, currentRoot, home) {
-  var out = []
-  if (!Array.isArray(raw)) return out
-  for (var i = 0; i < raw.length && out.length < MAX_LEGACY_ROOTS; i++) {
-    var clean = sanitizeDirPath(raw[i], home)
-    if (clean === "" || clean === currentRoot) continue
-    if (out.indexOf(clean) !== -1) continue
-    out.push(clean)
-  }
-  return out
-}
-
-// parseLibraryEntries(lines, rootDir, flatReciter) — build the library map
-// from `find <rootDir> -mindepth 1 -maxdepth 2 -name '*.mp3'` output.
-// Depth-1 files (<root>/<n>.mp3) are attributed to flatReciter and skipped
-// when it is empty; depth-2 files (<root>/<id>/<n>.mp3) belong to their
-// folder id. Nested entries win over flat ones on collision. Only canonical
-// 1..114 names under safe identifiers are accepted. Returns {"id:n": true}.
-function parseLibraryEntries(lines, rootDir, flatReciter) {
-  var map = {}
-  var prefix = String(rootDir || "")
-  while (prefix.length > 1 && prefix.charAt(prefix.length - 1) === "/") prefix = prefix.substring(0, prefix.length - 1)
-  prefix = prefix + "/"
-  var raw = Array.isArray(lines) ? lines : String(lines || "").split("\n")
-  // Two passes: flat entries first so a nested folder for the same reciter
-  // deterministically overwrites them.
-  for (var pass = 0; pass < 2; pass++) {
-    for (var i = 0; i < raw.length; i++) {
-      var line = String(raw[i] || "")
-      if (line.indexOf(prefix) !== 0) continue
-      var rel = line.substring(prefix.length)
-      if (rel === "") continue
-      var sep = rel.indexOf("/")
-      var id, fname
-      if (sep === -1) {
-        if (pass !== 0) continue
-        id = String(flatReciter || "")
-        fname = rel
-      } else {
-        if (pass !== 1) continue
-        id = rel.substring(0, sep)
-        fname = rel.substring(sep + 1)
-      }
-      if (id === "") continue
-      if (fname.length < 5 || fname.indexOf(".mp3") !== fname.length - 4) continue
-      var numStr = fname.substring(0, fname.length - 4)
-      if (!/^[0-9]+$/.test(numStr) || (numStr.length > 1 && numStr.charAt(0) === "0")) continue
-      var n = parseInt(numStr, 10)
-      if (!isValidSurahNumber(n) || !isSafeIdentifier(id)) continue
-      map[id + ":" + n] = true
-    }
-  }
-  return map
 }
 
 // --- format helpers --------------------------------------------------------

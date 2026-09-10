@@ -10,22 +10,7 @@ Item {
     property var shell: null
     property var pluginRegistry: null
 
-    readonly property string defaultDataDir: Quickshell.env("HOME") + "/.local/state/omarchy/quran"
-    // User-configured download root (persisted; "" = default). Previous roots
-    // are remembered in legacyRoots so already-downloaded files stay playable
-    // without a migration — lookups check the current root first, then each
-    // legacy root.
-    property string downloadDir: ""
-    property var legacyRoots: []
-    property string dataDir: root.downloadDir !== "" ? root.downloadDir : root.defaultDataDir
-    // Read-only local library: an existing folder of audio that is played
-    // directly (never copied or promoted). Two layouts are supported:
-    // <root>/<reciterId>/<n>.mp3, or flat <root>/<n>.mp3 attributed to the
-    // configured libraryReciter. Persisted; "" = disabled.
-    property string libraryDir: ""
-    property string libraryReciter: ""    // reciter for flat (depth-1) library files
-    property var libraryAvailable: ({})   // "<reciterId>:<n>" -> true, from the last scan
-    property bool libraryScanning: false
+    readonly property string dataDir: Quickshell.env("HOME") + "/.local/state/omarchy/quran"
     readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/settings/quran.json"
     // mpv IPC socket lives in a private 0700 runtime dir (created on startup),
     // never /tmp. Falls back under the cache root when XDG_RUNTIME_DIR is unset.
@@ -95,18 +80,19 @@ Item {
     property int downloadTotal: 114
     property int downloadRevision: 0
     property string downloadReciter: ""   // reciter currently being downloaded
-    property var downloadFailedSurahs: [] // surah numbers that failed during the active run
     property var lastDownload: null       // { id, surah } for retry after failure
-    // The audio engine is the Go quranproxyd daemon + quranctl CLI. Their paths
-    // are resolved once at startup (onToolProbe): a committed prebuilt binary in
-    // the plugin folder wins, then the user-installed ~/.local/bin copy. When
-    // neither exists, setupRequired turns on and the engine actions fail with a
-    // "run install.sh" hint instead of silently breaking.
+    // The audio engine is the Python quranproxyd.py daemon + quranctl.py CLI
+    // (stdlib only). Their paths are resolved once at startup (onToolProbe): a
+    // script in the plugin folder wins (runs in place), then the
+    // user-installed ~/.local/bin copy. When neither exists,
+    // setupRequired turns on and the engine actions fail with a hint instead
+    // of silently breaking. python3 is invoked
+    // explicitly; the scripts are never marked executable-required.
     property string quranctlBinary: ""
     property bool setupRequired: false
     readonly property string cacheDir: Quickshell.env("HOME") + "/.cache/omarchy/quran"
 
-    // --- local range-caching proxy (quranproxyd) ---
+    // --- local range-caching proxy (quranproxyd.py) ---
     // The daemon serves non-downloaded surahs at
     // http://127.0.0.1:<proxyPort>/stream?tok=..&reciter=..&surah=.., validates
     // and promotes fully-fetched files into dataDir, and reports progress as
@@ -121,7 +107,6 @@ Item {
     property int proxySizeBytes: 0      // proxy-owned cache bytes (combined readout)
     property int proxyFilesCount: 0     // proxy-owned cache files (cacheInfo)
     property int proxyRestartCount: 0
-    property bool proxyManualRestart: false  // deliberate stop for a config change
 
     // --- proxy control plane (unix socket) ---
     // The daemon also listens on a unix socket in mpvRuntimeDir (announced as
@@ -455,13 +440,6 @@ Item {
             root.requestLocalValidation(id, n, shouldPlay, resumeMs);
             return;
         }
-        // A surah present in the configured local library plays straight from
-        // disk (the scan already vetted the path shape); never copied or
-        // re-fetched.
-        if (root.libraryHas(id, n)) {
-            root._playLibraryFile(id, n, shouldPlay, resumeMs);
-            return;
-        }
         // Stream through the local range-caching proxy; it validates and promotes
         // the surah to a permanent download on completion (no full-file download
         // needed before playback starts).
@@ -508,28 +486,6 @@ Item {
         }
         root._markFetchAttempt(id, n);
         root.startExplicitDownload(id, n);
-    }
-
-    // Play directly from the configured local library. The path shape was
-    // vetted by the scan (validated identifier + canonical surah number under
-    // the configured root), so this is as safe as any downloaded file.
-    function _playLibraryFile(id, n, autoplay, positionMs) {
-        var path = root.libraryAudioPath(id, n);
-        if (!Model.isSafeReciterArg(id) || !Model.isValidSurahNumber(n) || !root.libraryHas(id, n)) {
-            root.errorMessage = Model.tr(root.language, "playbackFailed");
-            return;
-        }
-        root.reciterId = id;
-        root.surahNumber = n;
-        root.playbackSourceKind = "library";
-        root.playbackSourceTarget = {
-            id: id,
-            n: n
-        };
-        root._setMprisMetadata(id, n);
-        root.resumePending = false;
-        root._mpvLoad("file://" + path, autoplay, positionMs);
-        root.saveState();
     }
 
     function _playNow(id, n) {
@@ -580,11 +536,10 @@ Item {
         }
         localValidationProc.mode = "playback";
         localValidationProc.target = target;
-        // Deep media validation (size, MIME type, ffprobe) of the first root
-        // that actually holds the file — see _audioResolveCommand. Exit 0 =
-        // valid (resolvedPath holds the file), 1 = missing everywhere,
-        // 3 = found but unusable media.
-        localValidationProc.command = root._audioResolveCommand(id, n, true);
+        // Deep media validation (size, MIME type, ffprobe) via the quranctl
+        // companion script — fails closed when file(1) is missing. A non-zero
+        // exit means the local file is unusable.
+        localValidationProc.command = ["python3", root.quranctlBinary, "validate", root.localAudioPath(id, n)];
         localValidationProc.running = true;
     }
 
@@ -622,28 +577,23 @@ Item {
         }
         localValidationProc.mode = mode;
         localValidationProc.target = target;
-        // Shallow existence probe across the current + legacy roots so a
-        // folder move doesn't invalidate flags for files left behind.
-        localValidationProc.command = root._audioResolveCommand(target.id, target.n, false);
+        localValidationProc.command = ["test", "-s", root.localAudioPath(target.id, target.n)];
         localValidationProc.running = true;
     }
 
     function onLocalValidationExited(exitCode) {
         var target = localValidationProc.target;
         var mode = localValidationProc.mode;
-        var resolved = localValidationProc.resolvedPath;
         localValidationProc.target = null;
         localValidationProc.mode = "";
-        localValidationProc.resolvedPath = "";
         if (target && exitCode !== 0) {
             root.invalidateSurahDownload(target.id, target.n);
             if (mode === "playback") {
                 // Corrupt downloaded file: delete it from disk (fail-closed whitelist
                 // inside quranctl) and refuse re-fetches for the cooldown window so a
                 // bad CDN file can't trigger a re-download loop. A retry after the
-                // window re-fetches clean. The remove targets the root the bad file
-                // was actually found in.
-                localRemoveProc.command = [root.quranctlBinary, "remove", "--state-dir", root.audioRootOf(resolved, target.id, target.n), target.id, String(target.n)];
+                // window re-fetches clean.
+                localRemoveProc.command = ["python3", root.quranctlBinary, "remove", "--state-dir", root.dataDir, target.id, String(target.n)];
                 localRemoveProc.running = true;
                 root._markFetchAttempt(target.id, target.n);
                 root.errorMessage = Model.tr(root.language, "playbackFailed");
@@ -653,64 +603,12 @@ Item {
             root.playbackSourceTarget = target;
             root.reciterId = target.id;
             root.surahNumber = target.n;
-            // resolved is the exact validated path from the resolver command.
-            root._mpvLoad("file://" + resolved, target.autoplay, target.positionMs);
+            root._mpvLoad(Model.localAudioUrl(root.dataDir, target.id, target.n), target.autoplay, target.positionMs);
             root._setMprisMetadata(target.id, target.n);
             root.resumePending = false;
             root.saveState();
         }
         pumpLocalValidation();
-    }
-
-    // --- multi-root audio path resolution --------------------------------------
-
-    // Single-quote a string for safe interpolation into a `bash -c` script.
-    // Candidates are validated paths (no control chars, no ".."), but may
-    // contain spaces or quotes of their own.
-    function _shellQuote(s) {
-        return "'" + String(s).replace(/'/g, "'\\''") + "'";
-    }
-
-    // All roots that may hold downloaded files: the active download dir first,
-    // then legacy roots (most recent first).
-    function _audioRoots() {
-        var roots = [root.dataDir];
-        var legacy = Array.isArray(root.legacyRoots) ? root.legacyRoots : [];
-        for (var i = legacy.length - 1; i >= 0; i--) {
-            if (legacy[i] && roots.indexOf(legacy[i]) === -1)
-                roots.push(legacy[i]);
-        }
-        return roots;
-    }
-
-    // Command that finds the first root holding <id>/<n>.mp3 and, in deep
-    // mode, media-validates it with quranctl before reporting success.
-    // Exit codes: 0 = found (stdout carries the absolute path), 1 = missing,
-    // 3 = present but invalid media (deep mode only).
-    function _audioResolveCommand(id, n, deep) {
-        if (!Model.isSafeReciterArg(id) || !Model.isValidSurahNumber(n))
-            return ["false"];
-        var suffix = "/" + id + "/" + n + ".mp3";
-        var quoted = [];
-        var roots = root._audioRoots();
-        for (var i = 0; i < roots.length; i++)
-            quoted.push(root._shellQuote(roots[i] + suffix));
-        var script = 'found=""; for p in ' + quoted.join(" ") + '; do if [ -s "$p" ]; then found="$p"; break; fi; done; [ -n "$found" ] || exit 1;';
-        if (!deep)
-            return ["bash", "-c", script + ' printf %s "$found"'];
-        if (!root.quranctlBinary)
-            return ["false"];
-        return ["bash", "-c", script + " " + root._shellQuote(root.quranctlBinary) + " validate \"$found\" || exit 3; printf %s \"$found\""];
-    }
-
-    // Root directory of a resolved audio path (inverse of the candidate
-    // construction above); falls back to the active dataDir when the shape
-    // doesn't match.
-    function audioRootOf(resolved, id, n) {
-        var suffix = "/" + id + "/" + n + ".mp3";
-        if (typeof resolved === "string" && resolved.length > suffix.length && resolved.substring(resolved.length - suffix.length) === suffix)
-            return resolved.substring(0, resolved.length - suffix.length);
-        return root.dataDir;
     }
 
     // Set mpv's force-media-title and artist so mpv-mpris surfaces surah/reciter
@@ -978,7 +876,6 @@ Item {
         root.downloadDone = 0;
         root.downloadTotal = 1;
         root.errorMessage = "";
-        root.downloadFailedSurahs = [];
         downloadProc.targetReciter = id;
         downloadProc.targetSurah = n;
         // Persist the active download so a shell restart resumes it.
@@ -989,17 +886,13 @@ Item {
         };
         root.saveState();
         var reciter = root.reciterFor(id);
-        // quranctl shares the daemon's validation/fetch policy (same internal
-        // packages); it validates the origin URL in-process and reports the
+        // quranctl.py shares the daemon's validation/fetch policy (same internal
+        // modules); it validates the origin URL in-process and reports the
         // quranctl progress lines (download.sh-compatible) on stdout.
-        var cmd = [root.quranctlBinary, "download", id, String(n)];
+        var cmd = ["python3", root.quranctlBinary, "download", id, String(n)];
         if (reciter && reciter.server) {
             cmd.push("--server");
             cmd.push(reciter.server);
-        }
-        if (root.dataDir !== root.defaultDataDir) {
-            cmd.push("--dest-root");
-            cmd.push(root.dataDir);
         }
         downloadProc.command = cmd;
         downloadProc.running = true;
@@ -1038,7 +931,6 @@ Item {
         root.downloadDone = 0;
         root.downloadTotal = work.length;
         root.errorMessage = "";
-        root.downloadFailedSurahs = [];
         root.startMushafDownload(id, work);
     }
     // function downloadMushaf(id) {
@@ -1094,7 +986,6 @@ Item {
             id: id,
             surah: 0
         };
-        root.downloadFailedSurahs = [];
         downloadProc.targetReciter = id;
         downloadProc.targetSurah = 0;
         // Persist the active mushaf download (with the exact remaining list) so a
@@ -1106,14 +997,10 @@ Item {
         };
         root.saveState();
         var reciter = root.reciterFor(id);
-        var cmd = [root.quranctlBinary, "download", id, "--only", list.join(",")];
+        var cmd = ["python3", root.quranctlBinary, "download", id, "--only", list.join(",")];
         if (reciter && reciter.server) {
             cmd.push("--server");
             cmd.push(reciter.server);
-        }
-        if (root.dataDir !== root.defaultDataDir) {
-            cmd.push("--dest-root");
-            cmd.push(root.dataDir);
         }
         downloadProc.command = cmd;
         downloadProc.running = true;
@@ -1156,34 +1043,12 @@ Item {
             root.downloadTotal = 100;
             return;
         }
-        // Per-surah completion from the running quranctl: mark immediately so
-        // the surah list flips icons live instead of only at process exit.
-        // (Idempotent — onExited re-marks the single-surah case.)
-        var done = String(line).match(/^surah_done\s+(\d+)\s*$/);
-        if (done) {
-            var dsn = parseInt(done[1], 10);
-            if (downloadProc.targetReciter && Model.isValidSurahNumber(dsn))
-                root.markSurahDownloaded(downloadProc.targetReciter, dsn);
-            return;
-        }
-        var failed = String(line).match(/^surah_failed\s+(\d+)\s*$/);
-        if (failed) {
-            var fsn = parseInt(failed[1], 10);
-            if (Model.isValidSurahNumber(fsn) && root.downloadFailedSurahs.indexOf(fsn) === -1)
-                root.downloadFailedSurahs = root.downloadFailedSurahs.concat([fsn]);
-            return;
-        }
         var m = String(line).match(/^progress\s+(\d+)\/(\d+)\s*$/);
         if (!m)
             return;
         if (downloadProc.targetSurah === 0) {
-            // The tally reflects what this run was launched with (only the
-            // missing surahs) — never re-inflated to 114 mid-run.
-            var total = parseInt(m[2], 10);
-            if (total >= 1 && total <= 114) {
-                root.downloadTotal = total;
-                root.downloadDone = Math.min(total, parseInt(m[1]));
-            }
+            root.downloadDone = Math.min(114, parseInt(m[1]));
+            root.downloadTotal = 114;
         } else {
             root.downloadDone = parseInt(m[1]);
             root.downloadTotal = parseInt(m[2]);
@@ -1221,196 +1086,6 @@ Item {
         });
     }
 
-    // --- storage roots ---------------------------------------------------------
-
-    // Change the download folder. Files are never moved: the previous root is
-    // remembered in legacyRoots so its downloads stay playable, new downloads
-    // land in the new root, and the proxy daemon restarts so promotions follow.
-    // Returns null on success or a user-facing error string.
-    function setDownloadDir(raw) {
-        var clean = Model.sanitizeDirPath(raw, Quickshell.env("HOME"));
-        var hadInput = String(raw === undefined || raw === null ? "" : raw).trim() !== "";
-        if (hadInput && clean === "")
-            return root.trStr("invalidPath");
-        if (clean === root.downloadDir)
-            return null;
-        var previous = root.dataDir;
-        root.downloadDir = clean;
-        if (previous !== root.dataDir)
-            root.legacyRoots = Model.pushLegacyRoot(root.legacyRoots, previous, root.dataDir);
-        root.saveState();
-        root.downloadRevision++;
-        root.restartProxyForConfig();
-        return null;
-    }
-
-    function trStr(key) {
-        return Model.tr(root.language, key);
-    }
-
-    // Settings-UI entry point: validate the shape synchronously (inline error),
-    // then prove writability with a tiny probe process before committing.
-    property string dirApplyTarget: ""
-
-    function applyDownloadDir(raw) {
-        var clean = Model.sanitizeDirPath(raw, Quickshell.env("HOME"));
-        var hadInput = String(raw === undefined || raw === null ? "" : raw).trim() !== "";
-        if (hadInput && clean === "")
-            return root.trStr("invalidPath");
-        if (clean === root.downloadDir)
-            return "";
-        dirApplyTarget = clean;
-        if (clean === "") {
-            // Reset to the default root — nothing to probe.
-            var err = root.setDownloadDir("");
-            return err || "";
-        }
-        var q = root._shellQuote(clean);
-        dirProbeProc.command = ["bash", "-c", "mkdir -p -- " + q + " 2>/dev/null && [ -w " + q + " ] && touch " + q + "/.quran-probe 2>/dev/null && rm -f " + q + "/.quran-probe"];
-        dirProbeProc.running = true;
-        return "";
-    }
-
-    Process {
-        id: dirProbeProc
-        running: false
-        onExited: function (exitCode) {
-            if (!root.dirApplyTarget)
-                return;
-            var target = root.dirApplyTarget;
-            root.dirApplyTarget = "";
-            if (exitCode !== 0) {
-                root.settingsError = root.trStr("pathNotWritable");
-                return;
-            }
-            var err = root.setDownloadDir(target);
-            if (err)
-                root.settingsError = err;
-        }
-    }
-
-    // Transient inline error for the settings panel (path validation etc.);
-    // separate from playback errorMessage so it never masquerades as one.
-    property string settingsError: ""
-
-    // --- local library ----------------------------------------------------------
-
-    function libraryHas(id, n) {
-        return root.libraryDir !== "" && root.libraryAvailable[id + ":" + n] === true;
-    }
-
-    function libraryAudioPath(id, n) {
-        return root.libraryDir + "/" + id + "/" + n + ".mp3";
-    }
-
-    function libraryCount(id) {
-        var count = 0;
-        for (var i = 1; i <= 114; i++) {
-            if (root.libraryAvailable[id + ":" + i] === true)
-                count++;
-        }
-        return count;
-    }
-
-    // One bounded scan of the library root. The result map only accepts
-    // <safeId>/<canonical 1..114>.mp3 entries (plus flat <n>.mp3 bound to
-    // libraryReciter), so a stray file can't inject a hostile path into
-    // playback.
-    function rescanLibrary() {
-        if (root.shuttingDown || libraryScanProc.running)
-            return;
-        if (root.libraryDir === "") {
-            root.libraryAvailable = {};
-            return;
-        }
-        root.libraryScanning = true;
-        libraryScanProc.command = ["bash", "-c", "find " + root._shellQuote(root.libraryDir) + " -mindepth 1 -maxdepth 2 -type f -name '*.mp3'"];
-        libraryScanProc.running = true;
-    }
-
-    function onLibraryScanFinished(text, exitCode) {
-        root.libraryScanning = false;
-        if (exitCode !== 0) {
-            root.settingsError = root.trStr("libraryUnreadable");
-            return;
-        }
-        root.libraryAvailable = Model.parseLibraryEntries(String(text || "").split("\n"), root.libraryDir, root.libraryReciter);
-        root.downloadRevision++;
-    }
-
-    // Bind flat (depth-1) library files to a reciter and rescan.
-    function setLibraryReciter(id) {
-        var clean = Model.isSafeReciterArg(String(id || "")) ? String(id) : "";
-        if (clean === root.libraryReciter)
-            return;
-        root.libraryReciter = clean;
-        root.saveState();
-        root.rescanLibrary();
-    }
-
-    // Settings entry point for the library folder: validate shape inline, then
-    // probe readability and scan in one process before committing.
-    property string libraryApplyTarget: ""
-
-    function applyLibraryDir(raw) {
-        var clean = Model.sanitizeDirPath(raw, Quickshell.env("HOME"));
-        var hadInput = String(raw === undefined || raw === null ? "" : raw).trim() !== "";
-        if (hadInput && clean === "")
-            return root.trStr("invalidPath");
-        if (clean === root.libraryDir)
-            return "";
-        libraryApplyTarget = clean;
-        if (clean === "") {
-            root.libraryDir = "";
-            root.libraryAvailable = {};
-            root.saveState();
-            root.downloadRevision++;
-            return "";
-        }
-        var q = root._shellQuote(clean);
-        libraryProbeProc.command = ["bash", "-c", "[ -d " + q + " ] && [ -r " + q + " ] && find " + q + " -mindepth 1 -maxdepth 2 -type f -name '*.mp3'"];
-        libraryProbeProc.running = true;
-        return "";
-    }
-
-    Process {
-        id: libraryProbeProc
-        running: false
-        stdout: StdioCollector {
-            waitForEnd: true
-            onStreamFinished: root._libraryProbeOutput = text
-        }
-        onExited: function (exitCode) {
-            if (!root.libraryApplyTarget)
-                return;
-            var target = root.libraryApplyTarget;
-            root.libraryApplyTarget = "";
-            if (exitCode !== 0) {
-                root.settingsError = root.trStr("libraryUnreadable");
-                return;
-            }
-            root.libraryDir = target;
-            root.saveState();
-            root.onLibraryScanFinished(root._libraryProbeOutput, 0);
-        }
-    }
-    property string _libraryProbeOutput: ""
-
-    Process {
-        id: libraryScanProc
-        running: false
-        stdout: StdioCollector {
-            waitForEnd: true
-            onStreamFinished: root._libraryScanOutput = text
-        }
-        onExited: function (exitCode) {
-            var text = root._libraryScanOutput;
-            root._libraryScanOutput = "";
-            root.onLibraryScanFinished(text, exitCode);
-        }
-    }
-    property string _libraryScanOutput: ""
-
     // One-shot HTTP request over the daemon's control-plane unix socket. The
     // daemon's responses are single-line JSON, so the body is the last parsed
     // line of the response; headers are discarded. Failures are silent (the
@@ -1427,26 +1102,13 @@ Item {
         proxyHttpSocket.connected = true;
     }
 
-    // Restart the daemon because configuration changed (download folder). Any
-    // in-flight stream dies — acceptable for a deliberate settings change.
-    function restartProxyForConfig() {
-        if (root.shuttingDown || !root.proxyBinary)
-            return;
-        root.proxyManualRestart = true;
-        root.proxyRestartCount = 0;
-        if (proxyProc.running)
-            proxyProc.running = false;
-        else
-            proxyRestartTimer.restart();
-    }
+    // --- quranproxyd.py lifecycle + events ------------------------------------
 
-    // --- quranproxyd lifecycle + events ---------------------------------------
-
-    // Locate the audio-engine binaries once, at startup. The probe prefers a
-    // committed prebuilt binary inside the plugin folder (works straight after
-    // `omarchy plugin add`), then a user-installed copy in ~/.local/bin (dev /
-    // install.sh). Any binary not found flips setupRequired so engine actions
-    // show a clear setup hint instead of failing silently.
+    // Locate the audio-engine scripts once, at startup. The probe prefers a
+    // script inside the plugin folder (runs in place), then a user-installed
+    // copy in ~/.local/bin. Any script not
+    // found flips setupRequired so engine actions show a clear setup hint
+    // instead of failing silently.
     function onToolProbe(out) {
         var found = {};
         var lines = String(out || "").split("\n");
@@ -1464,13 +1126,13 @@ Item {
         if (root.setupRequired) {
             root.errorMessage = Model.tr(root.language, "setupRequired");
         } else {
-            // Binaries are resolved now; start the streaming daemon. (Component
+            // Scripts are resolved now; start the streaming daemon. (Component
             // onCompleted must not call _startProxy before the probe lands.)
             root._startProxy();
         }
     }
 
-    // Start the range-caching proxy. The Go daemon reads the catalog from
+    // Start the range-caching proxy. The Python daemon reads the catalog from
     // statePath (watched for changes), promotes into dataDir, and writes the
     // handoff file on startup.
     function _startProxy() {
@@ -1482,7 +1144,7 @@ Item {
             root.errorMessage = Model.tr(root.language, "setupRequired");
             return;
         }
-        proxyProc.command = [root.proxyBinary, "--state-file", root.statePath, "--state-dir", root.dataDir, "--cache-dir", root.cacheDir, "--token-file", root.proxyHandoffPath];
+        proxyProc.command = ["python3", root.proxyBinary, "--state-file", root.statePath, "--state-dir", root.dataDir, "--cache-dir", root.cacheDir, "--token-file", root.proxyHandoffPath];
         proxyProc.running = true;
     }
 
@@ -1642,11 +1304,7 @@ Item {
             catalogFetchedAt: root.catalogFetchedAt,
             reciterStatus: root.reciterStatus,
             downloadedSurahs: root.downloadedSurahs,
-            downloadIntent: root.downloadIntent,
-            downloadDir: root.downloadDir,
-            legacyRoots: root.legacyRoots,
-            libraryDir: root.libraryDir,
-            libraryReciter: root.libraryReciter
+            downloadIntent: root.downloadIntent
         };
         stateFile.setText(JSON.stringify(state));
     }
@@ -1698,38 +1356,12 @@ Item {
         if (typeof data.catalogFetchedAt === "number" && isFinite(data.catalogFetchedAt) && data.catalogFetchedAt >= 0) {
             root.catalogFetchedAt = data.catalogFetchedAt;
         }
-        // Configured download root + remembered previous roots. Each entry is
-        // re-validated with the same rules quranctl applies to --dest-root; a
-        // hostile state file falls back to the default root.
-        if (typeof data.downloadDir === "string")
-            root.downloadDir = data.downloadDir === "" ? "" : Model.sanitizeDirPath(data.downloadDir, Quickshell.env("HOME"));
-        if (Array.isArray(data.legacyRoots))
-            root.legacyRoots = Model.mergeLegacyRoots(data.legacyRoots, root.dataDir, Quickshell.env("HOME"));
-        if (typeof data.libraryDir === "string") {
-            var libClean = data.libraryDir === "" ? "" : Model.sanitizeDirPath(data.libraryDir, Quickshell.env("HOME"));
-            if (libClean !== root.libraryDir) {
-                root.libraryDir = libClean;
-                root.rescanLibrary();
-            }
-        }
-        if (typeof data.libraryReciter === "string") {
-            var libRec = data.libraryReciter;
-            if (libRec !== "" && !Model.isSafeReciterArg(libRec))
-                libRec = "";
-            if (libRec !== root.libraryReciter) {
-                root.libraryReciter = libRec;
-                // Flat files are attributed by this binding — rescan so the
-                // map reflects it even when only the reciter changed.
-                root.rescanLibrary();
-            }
-        }
         if (data.reciterStatus && typeof data.reciterStatus === "object") {
             // Keys must be valid identifiers, values from the known set; junk is
-            // dropped individually (including legacy "null" keys written by an
-            // old bug).
+            // dropped individually.
             var statusClean = {};
             for (var sk in data.reciterStatus) {
-                if (!Model.isSafeIdentifier(sk) || sk === "null")
+                if (!Model.isSafeIdentifier(sk))
                     continue;
                 var sv = data.reciterStatus[sk];
                 if (sv === "downloaded" || sv === "declined" || sv === "failed")
@@ -1890,7 +1522,7 @@ Item {
         mprisFindProc.running = true;
         // Resolve the audio-engine binaries first; _startProxy is a no-op until
         // they are found (or setupRequired is set).
-        toolProbeProc.command = ["bash", "-c", 'arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) arch="";; esac;' + ' plugin="$HOME/.config/omarchy/plugins/mus.quran/prebuilt/linux-$arch";' + ' for b in quranproxyd quranctl; do c="";' + '   [ -n "$arch" ] && [ -x "$plugin/$b" ] && c="$plugin/$b";' + '   [ -z "$c" ] && [ -x "$HOME/.local/bin/$b" ] && c="$HOME/.local/bin/$b";' + '   [ -n "$c" ] && echo "$b $c"; done'];
+        toolProbeProc.command = ["bash", "-c", 'plugin="$HOME/.config/omarchy/plugins/mus.quran";' + ' for b in quranproxyd.py quranctl.py; do c="";' + '   [ -f "$plugin/$b" ] && c="$plugin/$b";' + '   [ -z "$c" ] && [ -f "$HOME/.local/bin/$b" ] && c="$HOME/.local/bin/$b";' + '   [ -n "$c" ] && echo "${b%.py} $c"; done'];
         toolProbeProc.running = true;
     }
 
@@ -1936,11 +1568,6 @@ Item {
         id: localValidationProc
         property var target: null
         property string mode: ""
-        property string resolvedPath: ""
-        stdout: StdioCollector {
-            waitForEnd: true
-            onStreamFinished: localValidationProc.resolvedPath = text.trim()
-        }
         onExited: function (exitCode) {
             root.onLocalValidationExited(exitCode);
         }
@@ -2115,13 +1742,6 @@ Item {
                     n = 0;
                 }
             } else if (id && !preempted) {
-                // A failed run must not replay on every shell restart: drop the
-                // persisted intent (manual retry via the row icon still works).
-                if (root.downloadIntent && root.downloadIntent.id === id
-                    && root.downloadIntent.surah === n) {
-                    root.downloadIntent = null;
-                    root.saveState();
-                }
                 if (n > 0) {
                     // Single-surah failure: surface it through the existing inline
                     // error pattern; the icon reverts and a retry re-runs quranctl.
@@ -2205,13 +1825,6 @@ Item {
             root.proxyReady = false;
             root.proxyPort = 0;
             root.proxyToken = "";
-            if (root.proxyManualRestart) {
-                // Deliberate stop (config change): relaunch without burning
-                // the crash-restart budget.
-                root.proxyManualRestart = false;
-                proxyRestartTimer.restart();
-                return;
-            }
             if (!root.shuttingDown && root.proxyRestartCount < 5) {
                 root.proxyRestartCount++;
                 proxyRestartTimer.restart();
