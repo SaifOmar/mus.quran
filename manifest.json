@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "mus.quran",
   "name": "Quran",
-  "version": "1.1.1",
+  "version": "2.0.0",
   "author": "Saif",
   "license": "MIT",
-  "description": "Quran recitation player with streaming, caching, and downloads. Requires mpv; ships a local Go audio engine (attested prebuilts from GitHub Releases).",
+  "description": "Quran recitation player with streaming, caching, and downloads. Requires mpv and python3; ships a local Python audio engine.",
   "kinds": [
     "service",
     "bar-widget"

@@ -1,0 +1,5 @@
+# N999 fires because the checkout directory is named `mus.quran` (DNS-style).
+# These scripts are not importable as a `mus.quran` package, so the rule is
+# not meaningful here.
+[lint]
+ignore = ["N999"]

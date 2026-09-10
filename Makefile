@@ -1,49 +1,24 @@
-BINS := quranproxyd quranctl
+BINS := quranproxyd.py quranctl.py
 PREFIX := $(HOME)/.local/bin
-ARCHS := amd64 arm64
 
-.PHONY: all build install test vet fmt clean prebuilt dist
+.PHONY: all install test clean
 
-all: build
+all:
 
-build:
-	go build -o bin/quranproxyd ./cmd/quranproxyd
-	go build -o bin/quranctl ./cmd/quranctl
-
-# Install into the user's ~/.local/bin (the engine binaries' fallback location).
-install: build
-	install -D -m 0755 bin/quranproxyd $(PREFIX)/quranproxyd
-	install -D -m 0755 bin/quranctl $(PREFIX)/quranctl
-
-# Static, stripped prebuilt binaries committed under prebuilt/<os>-<arch>.
-# Service.qml finds these first, so `omarchy plugin add` works with zero setup.
-prebuilt:
-	@for arch in $(ARCHS); do \
-	  echo "building linux/$$arch"; \
-	  GOOS=linux GOARCH=$$arch CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
-	    -o prebuilt/linux-$$arch/quranproxyd ./cmd/quranproxyd; \
-	  GOOS=linux GOARCH=$$arch CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
-	    -o prebuilt/linux-$$arch/quranctl ./cmd/quranctl; \
+# Link the scripts into ~/.local/bin so the Service.qml probe's fallback path
+# finds them no matter which folder the plugin is installed from.
+install:
+	@mkdir -p $(PREFIX)
+	@for f in $(BINS); do \
+	  ln -sf $(CURDIR)/$$f $(PREFIX)/$$f; \
 	done
-
-# Release archives: one tar.gz per arch plus a SHA-256 manifest, for GitHub
-# Releases. Builds from the committed prebuilt binaries.
-dist: prebuilt
-	@rm -rf dist && mkdir -p dist
-	@for arch in $(ARCHS); do \
-	  tar -C prebuilt -czf dist/mus.quran-linux-$$arch.tar.gz linux-$$arch; \
-	done
-	@cd dist && sha256sum *.tar.gz > SHA256SUMS
-	@ls -lh dist
+	@echo "linked $(BINS) into $(PREFIX)"
 
 test:
-	go test ./...
+	.venv/bin/pytest tests/ -v
 
-vet:
-	go vet ./...
-
-fmt:
-	gofmt -l -w .
+lint:
+	.venv/bin/ruff check .
 
 clean:
-	rm -rf bin dist
+	rm -rf __pycache__ */__pycache__ .pytest_cache .ruff_cache

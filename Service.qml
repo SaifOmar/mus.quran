@@ -81,17 +81,18 @@ Item {
     property int downloadRevision: 0
     property string downloadReciter: ""   // reciter currently being downloaded
     property var lastDownload: null       // { id, surah } for retry after failure
-    // The audio engine is the Go quranproxyd daemon + quranctl CLI. Their paths
-    // are resolved once at startup (onToolProbe): a prebuilt binary in the
-    // plugin folder wins (from install.sh or manual placement), then the
-    // user-installed ~/.local/bin copy. When neither exists, setupRequired
-    // turns on and the engine actions fail with a "run install.sh" hint
-    // instead of silently breaking.
+    // The audio engine is the Python quranproxyd.py daemon + quranctl.py CLI
+    // (stdlib only). Their paths are resolved once at startup (onToolProbe): a
+    // script in the plugin folder wins (runs in place), then the
+    // user-installed ~/.local/bin copy. When neither exists,
+    // setupRequired turns on and the engine actions fail with a hint instead
+    // of silently breaking. python3 is invoked
+    // explicitly; the scripts are never marked executable-required.
     property string quranctlBinary: ""
     property bool setupRequired: false
     readonly property string cacheDir: Quickshell.env("HOME") + "/.cache/omarchy/quran"
 
-    // --- local range-caching proxy (quranproxyd) ---
+    // --- local range-caching proxy (quranproxyd.py) ---
     // The daemon serves non-downloaded surahs at
     // http://127.0.0.1:<proxyPort>/stream?tok=..&reciter=..&surah=.., validates
     // and promotes fully-fetched files into dataDir, and reports progress as
@@ -536,9 +537,9 @@ Item {
         localValidationProc.mode = "playback";
         localValidationProc.target = target;
         // Deep media validation (size, MIME type, ffprobe) via the quranctl
-        // companion binary — fails closed when file(1) is missing. A non-zero
+        // companion script — fails closed when file(1) is missing. A non-zero
         // exit means the local file is unusable.
-        localValidationProc.command = [root.quranctlBinary, "validate", root.localAudioPath(id, n)];
+        localValidationProc.command = ["python3", root.quranctlBinary, "validate", root.localAudioPath(id, n)];
         localValidationProc.running = true;
     }
 
@@ -592,7 +593,7 @@ Item {
                 // inside quranctl) and refuse re-fetches for the cooldown window so a
                 // bad CDN file can't trigger a re-download loop. A retry after the
                 // window re-fetches clean.
-                localRemoveProc.command = [root.quranctlBinary, "remove", "--state-dir", root.dataDir, target.id, String(target.n)];
+                localRemoveProc.command = ["python3", root.quranctlBinary, "remove", "--state-dir", root.dataDir, target.id, String(target.n)];
                 localRemoveProc.running = true;
                 root._markFetchAttempt(target.id, target.n);
                 root.errorMessage = Model.tr(root.language, "playbackFailed");
@@ -885,10 +886,10 @@ Item {
         };
         root.saveState();
         var reciter = root.reciterFor(id);
-        // quranctl shares the daemon's validation/fetch policy (same internal
-        // packages); it validates the origin URL in-process and reports the
+        // quranctl.py shares the daemon's validation/fetch policy (same internal
+        // modules); it validates the origin URL in-process and reports the
         // quranctl progress lines (download.sh-compatible) on stdout.
-        var cmd = [root.quranctlBinary, "download", id, String(n)];
+        var cmd = ["python3", root.quranctlBinary, "download", id, String(n)];
         if (reciter && reciter.server) {
             cmd.push("--server");
             cmd.push(reciter.server);
@@ -996,7 +997,7 @@ Item {
         };
         root.saveState();
         var reciter = root.reciterFor(id);
-        var cmd = [root.quranctlBinary, "download", id, "--only", list.join(",")];
+        var cmd = ["python3", root.quranctlBinary, "download", id, "--only", list.join(",")];
         if (reciter && reciter.server) {
             cmd.push("--server");
             cmd.push(reciter.server);
@@ -1101,11 +1102,11 @@ Item {
         proxyHttpSocket.connected = true;
     }
 
-    // --- quranproxyd lifecycle + events ---------------------------------------
+    // --- quranproxyd.py lifecycle + events ------------------------------------
 
-    // Locate the audio-engine binaries once, at startup. The probe prefers a
-    // prebuilt binary inside the plugin folder (from install.sh or manual
-    // placement), then a user-installed copy in ~/.local/bin. Any binary not
+    // Locate the audio-engine scripts once, at startup. The probe prefers a
+    // script inside the plugin folder (runs in place), then a user-installed
+    // copy in ~/.local/bin. Any script not
     // found flips setupRequired so engine actions show a clear setup hint
     // instead of failing silently.
     function onToolProbe(out) {
@@ -1125,13 +1126,13 @@ Item {
         if (root.setupRequired) {
             root.errorMessage = Model.tr(root.language, "setupRequired");
         } else {
-            // Binaries are resolved now; start the streaming daemon. (Component
+            // Scripts are resolved now; start the streaming daemon. (Component
             // onCompleted must not call _startProxy before the probe lands.)
             root._startProxy();
         }
     }
 
-    // Start the range-caching proxy. The Go daemon reads the catalog from
+    // Start the range-caching proxy. The Python daemon reads the catalog from
     // statePath (watched for changes), promotes into dataDir, and writes the
     // handoff file on startup.
     function _startProxy() {
@@ -1143,7 +1144,7 @@ Item {
             root.errorMessage = Model.tr(root.language, "setupRequired");
             return;
         }
-        proxyProc.command = [root.proxyBinary, "--state-file", root.statePath, "--state-dir", root.dataDir, "--cache-dir", root.cacheDir, "--token-file", root.proxyHandoffPath];
+        proxyProc.command = ["python3", root.proxyBinary, "--state-file", root.statePath, "--state-dir", root.dataDir, "--cache-dir", root.cacheDir, "--token-file", root.proxyHandoffPath];
         proxyProc.running = true;
     }
 
@@ -1521,7 +1522,7 @@ Item {
         mprisFindProc.running = true;
         // Resolve the audio-engine binaries first; _startProxy is a no-op until
         // they are found (or setupRequired is set).
-        toolProbeProc.command = ["bash", "-c", 'arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) arch="";; esac;' + ' plugin="$HOME/.config/omarchy/plugins/mus.quran/prebuilt/linux-$arch";' + ' for b in quranproxyd quranctl; do c="";' + '   [ -n "$arch" ] && [ -x "$plugin/$b" ] && c="$plugin/$b";' + '   [ -z "$c" ] && [ -x "$HOME/.local/bin/$b" ] && c="$HOME/.local/bin/$b";' + '   [ -n "$c" ] && echo "$b $c"; done'];
+        toolProbeProc.command = ["bash", "-c", 'plugin="$HOME/.config/omarchy/plugins/mus.quran";' + ' for b in quranproxyd.py quranctl.py; do c="";' + '   [ -f "$plugin/$b" ] && c="$plugin/$b";' + '   [ -z "$c" ] && [ -f "$HOME/.local/bin/$b" ] && c="$HOME/.local/bin/$b";' + '   [ -n "$c" ] && echo "${b%.py} $c"; done'];
         toolProbeProc.running = true;
     }
 

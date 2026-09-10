@@ -4,9 +4,9 @@
 
 A Quran recitation player for the Omarchy bar. Play any surah by any reciter,
 stream it instantly, or download whole mushafs. The playback engine is a small
-**local Go service** (`quranproxyd`) with a CLI companion (`quranctl`) that
+**Python service** (`quranproxyd.py`) with a CLI companion (`quranctl.py`) that
 streams, caches, validates, and downloads audio over a hardened loopback
-proxy — attested prebuilt binaries are available from GitHub Releases.
+proxy — pure Python stdlib, no compiled binaries, no pip dependencies.
 
 ## Features
 
@@ -25,11 +25,10 @@ proxy — attested prebuilt binaries are available from GitHub Releases.
 
 * `mpv` (runtime; the player).
 * `mpv-mpris` (recommended for system media control).
+* `python3` (runtime; stdlib only — no pip packages).
 * `file` (runtime, used by the media validator; falls back gracefully if
   missing).
 * `ffprobe` (optional; deep validation when present).
-* Go 1.22+ — **only** if you use `install.sh --build` instead of downloading
-  prebuilt binaries.
 
 ## Install
 
@@ -37,59 +36,38 @@ proxy — attested prebuilt binaries are available from GitHub Releases.
 omarchy plugin add https://github.com/saifomar/mus.quran.git --enable
 ```
 
-Then install the audio engine (downloads attested prebuilt binaries from
-GitHub Releases):
-
-```sh
-./install.sh
-```
-
-**Optional**: compile locally instead of downloading:
-
-```sh
-./install.sh --build
-```
+The audio engine runs in place from the plugin folder — nothing to install.
+Optionally, `make install` links the scripts into `~/.local/bin` (a fallback the
+service probes after the plugin folder).
 
 Then restart your Omarchy shell.
 
 ## Uninstall
 
-To completely remove the mus.quran engine and its local data:
+Remove the plugin from Omarchy:
 
 ```sh
-./uninstall.sh
+omarchy plugin remove mus.quran
 ```
 
-If you installed the engine with a custom prefix, pass the same prefix when
-uninstalling:
+That removes mus.quran's downloaded audio, cache, and settings (runtime state
+under `~/.local/state/omarchy/quran` and `~/.cache/omarchy/quran`).
 
-```sh
-./uninstall.sh --prefix "$HOME/.local/share/bin"
-```
+No administrator privileges are required.
 
-The uninstall script removes the installed `quranproxyd` and `quranctl`
-binaries along with mus.quran's downloaded audio, cache, and settings.
-
-No `sudo` is required.
-
-After uninstalling, restart your Omarchy shell or disable/remove the plugin
+After removing, restart your Omarchy shell or disable/remove the plugin
 to unload the running engine.
 
-## Build from source
+## Develop
 
 ```sh
-make build          # dev build into ./bin (unstripped)
-make install        # installs ./bin binaries into ~/.local/bin
-make prebuilt       # static, stripped binaries for amd64 + arm64
-make dist           # tar.gz + SHA-256 archives per arch (for releases)
-make test           # Go unit tests
+make test           # pytest suite (tests/ ported from the Go reference tests)
+make lint           # ruff check
+make install        # symlink scripts into ~/.local/bin
 ```
 
-The Go module has **zero external dependencies** (`go.mod` has no `require`
-block), so builds work offline.
-
-Prebuilt binaries are built and attested via GitHub Actions on each push to
-`main` and on version tags. See [`.github/workflows/release.yml`](.github/workflows/release.yml).
+The Python engine is pure stdlib (no `requirements.txt`), so it runs offline.
+A `.venv` with pytest + ruff is used for development only.
 
 ## Security
 
@@ -106,8 +84,11 @@ This plugin was written with the security model of the Omarchy shell in mind
 * Media is validated (size cap, MIME, ffprobe) before a file is accepted as a
   permanent download; downloads stage through unique temp files and atomic
   renames.
-* No sudo, no install hooks, no writes outside your own state/cache/runtime
-  dirs.
+* **No prebuilt binaries.** The engine is pure Python stdlib — there are no
+  committed executables anywhere; the scripts run in place from the plugin
+  folder and `make install` optionally symlinks them into `~/.local/bin`.
+* No administrator privileges, no install hooks, no writes outside your own
+  state/cache/runtime dirs.
 
 ## Usage
 
@@ -139,5 +120,5 @@ MIT — see [LICENSE](LICENSE).
 ---
 
 *This repo used to be a self-contained shell plugin; it is now a single
-repository hosting both the plugin and its Go audio engine. See
+repository hosting both the plugin and its Python audio engine. See
 [docs/PLAN.md](docs/PLAN.md) for the design history.*

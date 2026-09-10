@@ -13,7 +13,7 @@ do not re-derive "similar" policies.
 
 ## Decisions (confirmed)
 
-1. **Module root** = `/home/saif/Dev/personal-projects/qr2/mus.quran2` (already
+1. **Module root** = `/home/saif/Dev/personal-projects/mus.quran` (already
    prepared empty). Single `go.mod`, layout below.
 2. **Budget = one shared 500MB knob, split ownership.** User-visible behavior
    stays one pool (one slider, one "Cache:" readout, one clear button). But:
@@ -62,7 +62,7 @@ do not re-derive "similar" policies.
 ## Repo layout
 
 ```
-mus.quran2/
+mus.quran/
   cmd/quranproxyd/main.go     entry, flags/env, graceful shutdown
   internal/config/            flags+env: --listen (127.0.0.1:0), --state-file,
                               --cache-dir, --budget-bytes, --max-concurrent,
