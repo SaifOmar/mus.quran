@@ -184,3 +184,29 @@ def test_clear_wipes_cache_only(tmp_path):
     assert c.get_file_count() == 0
     assert not (tmp_path / "ar.alafasy").exists()
     assert keeps.exists()
+
+
+def test_save_meta_rejects_planted_symlink(tmp_path):
+    rec_dir = tmp_path / "ar.alafasy"
+    rec_dir.mkdir(mode=0o700)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("do not clobber")
+    # Planted symlink at the deterministic sidecar .tmp path.
+    os.symlink(str(victim), str(rec_dir / "1.meta.json.tmp"))
+
+    c = RangeCache(str(tmp_path), budget_bytes=1 << 30)
+    assert c.set_size("ar.alafasy", 1, 100, "audio/mpeg") is False
+    assert victim.read_text() == "do not clobber"
+    assert not (rec_dir / "1.meta.json").exists()
+
+
+def test_dat_write_rejects_planted_symlink(tmp_path):
+    c = RangeCache(str(tmp_path), budget_bytes=1 << 30)
+    assert c.set_size("ar.alafasy", 1, 100, "audio/mpeg")
+    victim = tmp_path / "victim.bin"
+    victim.write_bytes(b"do not clobber")
+    os.unlink(c.data_path("ar.alafasy", 1))
+    os.symlink(str(victim), c.data_path("ar.alafasy", 1))
+
+    assert c.write_range("ar.alafasy", 1, 0, b"x") is False
+    assert victim.read_bytes() == b"do not clobber"

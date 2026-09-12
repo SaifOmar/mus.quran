@@ -1,7 +1,10 @@
 import json
 import os
+import stat
 import threading
 import time
+
+from session import create_exclusive_tmp
 
 
 class RangeCache:
@@ -29,9 +32,18 @@ class RangeCache:
     def _meta_path(self, reciter: str, surah: int) -> str:
         return os.path.join(self.cache_dir, reciter, f"{surah}.meta.json")
 
-    def _ensure_dir(self, reciter: str):
+    def _ensure_dir(self, reciter: str) -> bool:
         path = os.path.join(self.cache_dir, reciter)
-        os.makedirs(path, mode=0o700, exist_ok=True)
+        try:
+            os.makedirs(path, mode=0o700, exist_ok=True)
+            st = os.lstat(path)
+            return (
+                stat.S_ISDIR(st.st_mode)
+                and not stat.S_ISLNK(st.st_mode)
+                and st.st_uid == os.geteuid()
+            )
+        except OSError:
+            return False
 
     def _get_lock(self, reciter: str, surah: int) -> threading.RLock:
         key = (reciter, surah)
@@ -50,13 +62,28 @@ class RangeCache:
         except (json.JSONDecodeError, OSError):
             return None
 
-    def _save_meta(self, reciter: str, surah: int, meta: dict):
+    def _save_meta(self, reciter: str, surah: int, meta: dict) -> bool:
         path = self._meta_path(reciter, surah)
+        if not self._ensure_dir(reciter):
+            return False
         tmp_path = path + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(meta, f)
-        os.chmod(tmp_path, 0o600)
-        os.rename(tmp_path, path)
+        tmp_name = create_exclusive_tmp(tmp_path)
+        if not tmp_name:
+            return False
+        try:
+            with open(tmp_name, "w", encoding="utf-8") as f:
+                json.dump(meta, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.rename(tmp_name, path)
+            return True
+        except (OSError, json.JSONEncodeError):
+            return False
+        finally:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
 
     def _coalesce_ranges(self, ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
         """Merge overlapping/adjacent ranges. Input: list of [start, end) half-open."""
@@ -113,9 +140,14 @@ class RangeCache:
             return None
         return meta.get("size")
 
-    def set_size(self, reciter: str, surah: int, size: int, content_type: str, etag: str = ""):
-        """Initialize a new cache entry with known size."""
-        self._ensure_dir(reciter)
+    def set_size(self, reciter: str, surah: int, size: int, content_type: str, etag: str = "") -> bool:
+        """Initialize a new cache entry with known size. Returns True on success.
+
+        Refuses (False) if the reciter directory is missing, not owner-private,
+        or if a planted symlink sits at the .dat path.
+        """
+        if not self._ensure_dir(reciter):
+            return False
         meta = {
             "size": size,
             "content_type": content_type,
@@ -123,15 +155,25 @@ class RangeCache:
             "etag": etag,
             "updated_at": time.time(),
         }
-        self._save_meta(reciter, surah, meta)
-        # Preallocate sparse file
+        if not self._save_meta(reciter, surah, meta):
+            return False
+        # Preallocate sparse file (never follow a planted symlink)
         dat_path = self._cache_path(reciter, surah)
-        if not os.path.exists(dat_path):
+        try:
+            st = os.lstat(dat_path)
+            if stat.S_ISLNK(st.st_mode):
+                return False
+        except OSError:
             try:
-                with open(dat_path, "wb") as f:
+                fd = os.open(dat_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            except OSError:
+                return False
+            try:
+                with os.fdopen(fd, "wb") as f:
                     f.truncate(size)
             except OSError:
-                pass  # fallocate may fail on some filesystems
+                return False
+        return True
 
     def write_range(self, reciter: str, surah: int, offset: int, data: bytes) -> bool:
         """Write data at offset. Returns True if successful.
@@ -149,7 +191,11 @@ class RangeCache:
 
             dat_path = self._cache_path(reciter, surah)
             try:
-                with open(dat_path, "r+b") as f:
+                fd = os.open(dat_path, os.O_RDWR | os.O_NOFOLLOW)
+            except OSError:
+                return False
+            try:
+                with os.fdopen(fd, "r+b") as f:
                     f.seek(offset)
                     f.write(data)
                     f.flush()
@@ -175,7 +221,11 @@ class RangeCache:
                 if offset >= start and offset + length <= end:
                     dat_path = self._cache_path(reciter, surah)
                     try:
-                        with open(dat_path, "rb") as f:
+                        fd = os.open(dat_path, os.O_RDONLY | os.O_NOFOLLOW)
+                    except OSError:
+                        return None
+                    try:
+                        with os.fdopen(fd, "rb") as f:
                             f.seek(offset)
                             return f.read(length)
                     except OSError:

@@ -62,3 +62,32 @@ def test_is_safe_socket_path(tmp_path):
     assert is_safe_socket_path(f"{runtime}/../../etc/passwd", runtime) is False
     assert is_safe_socket_path("/tmp/other.sock", runtime) is False
     assert is_safe_socket_path("", runtime) is False
+
+
+def test_handoff_rejects_planted_symlink(tmp_path):
+    # A symlink planted at the deterministic .tmp path must be refused and
+    # the victim file must stay untouched.
+    run = tmp_path / "run"
+    run.mkdir(mode=0o700)
+    path = str(run / "handoff.json")
+    victim = tmp_path / "victim.txt"
+    victim.write_text("do not clobber")
+    os.symlink(str(victim), path + ".tmp")
+
+    assert write_handoff("/run/mpv.sock", 53100, "tok123", path) is False
+    assert victim.read_text() == "do not clobber"
+    assert not os.path.exists(path)
+
+
+def test_handoff_replaces_stale_regular_tmp(tmp_path):
+    # A stale regular .tmp from a crashed writer is cleaned up and retried.
+    run = tmp_path / "run"
+    run.mkdir(mode=0o700)
+    path = str(run / "handoff.json")
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        f.write("stale")
+
+    assert write_handoff("/run/mpv.sock", 53100, "tok123", path) is True
+    assert not os.path.exists(path + ".tmp")
+    data = read_handoff(path)
+    assert data == {"port": "53100", "token": "tok123", "sock": "/run/mpv.sock"}
